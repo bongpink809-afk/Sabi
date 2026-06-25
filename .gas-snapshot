@@ -1,0 +1,5 @@
+BillHookReceiverTest:test_BothWrong_RevertsWithWrongSender() (gas: 16747)
+BillHookReceiverTest:test_UnauthorizedCaller_Reverts() (gas: 12061)
+BillHookReceiverTest:test_ValidMessage_EmitsHookValidated() (gas: 24982)
+BillHookReceiverTest:test_WrongAmount_Reverts() (gas: 16716)
+BillHookReceiverTest:test_WrongSender_Reverts() (gas: 16724)
