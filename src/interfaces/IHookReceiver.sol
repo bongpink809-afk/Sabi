@@ -9,11 +9,11 @@ interface IHookReceiver {
     ///                                   KHÔNG phải ví người dùng — ví người dùng nằm trong messageBody.
     /// @param finalityThresholdExecuted  Ngưỡng finality mà message này được attest.
     /// @param messageBody                BurnMessageV2 payload. Giải mã theo byte offset cố định.
-    /// @return                           Phải trả về selector của chính hàm này để báo hiệu thành công.
+    /// @return                           true nếu xử lý thành công (confirmed: IMessageHandlerV2.sol returns bool).
     function handleReceiveFinalizedMessage(
         uint32 sourceDomain,
         bytes32 sender,
         uint32 finalityThresholdExecuted,
         bytes calldata messageBody
-    ) external returns (bytes4);
+    ) external returns (bool);
 }

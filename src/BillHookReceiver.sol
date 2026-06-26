@@ -25,12 +25,10 @@ event DebugMessageBody(bytes messageBody);
 
 // ─── BurnMessageV2 byte offsets ───────────────────────────────────────────────
 //
-// Nguồn: Circle CCTP V2 whitepaper. CHƯA xác minh với dữ liệu thực tế.
-// TODO (Phase 3 gate): lấy một messageBody thực từ giao dịch burn trên Base Sepolia,
-//      decode thủ công tại các offset 68, 100, 168, so sánh với các trường thực tế.
-//      Nếu sai → cập nhật các hằng số dưới đây rồi chạy lại test.
-//      Rủi ro cụ thể: OFFSET_HOOK_DATA có thể là 172 thay vì 168 nếu Circle
-//      chèn thêm 4 byte hookDataOffset tại vị trí 168–171.
+// Nguồn: BurnMessageV2.sol (circlefin/evm-cctp-contracts, xác nhận trực tiếp từ raw source).
+// OFFSET_AMOUNT=68, OFFSET_MESSAGE_SENDER=100, OFFSET_HOOK_DATA=228 — confirmed, không còn TODO.
+// TODO còn lại của Phase 1: burn thật từ Base Sepolia để xác nhận bằng dữ liệu on-chain thực tế
+//      qua DebugMessageBody event log.
 //
 //  Offset  Size  Field
 //  0       4     version (uint32)
@@ -39,8 +37,9 @@ event DebugMessageBody(bytes messageBody);
 //  68      32    amount (uint256)
 //  100     32    messageSender (bytes32)   ← ví người dùng
 //  132     32    maxFee (uint256)          — V2 only
-//  164     4     minFinalityThreshold (uint32) — V2 only
-//  168+    var   hookData
+//  164     32    feeExecuted (uint256)     — V2 only (confirmed: FEE_EXECUTED_INDEX=164)
+//  196     32    expirationBlock (uint256) — V2 only (confirmed: EXPIRATION_BLOCK_INDEX=196)
+//  228+    var   hookData                  (confirmed: HOOK_DATA_INDEX=228)
 
 /// @title BillHookReceiver
 /// @notice Phase 1 — isolated CCTP V2 hook receiver.
@@ -62,7 +61,7 @@ contract BillHookReceiver is IHookReceiver {
 
     uint256 private constant OFFSET_AMOUNT         = 68;
     uint256 private constant OFFSET_MESSAGE_SENDER = 100;
-    uint256 private constant OFFSET_HOOK_DATA      = 168; // TODO: xác minh — có thể là 172
+    uint256 private constant OFFSET_HOOK_DATA      = 228; // confirmed: BurnMessageV2.sol HOOK_DATA_INDEX=228
 
     /// @param messageSender_      Ví người dùng kỳ vọng (address, tự động chuyển sang bytes32).
     /// @param amount_             Số tiền USDC kỳ vọng.
@@ -87,7 +86,7 @@ contract BillHookReceiver is IHookReceiver {
         bytes32, /* sender — là TokenMessenger, không phải ví người dùng */
         uint32, /* finalityThresholdExecuted */
         bytes calldata messageBody
-    ) external override returns (bytes4) {
+    ) external override returns (bool) {
         if (msg.sender != messageTransmitter) revert UnauthorizedCaller(msg.sender);
 
         emit DebugMessageBody(messageBody); // TODO: xóa trước Phase 3
@@ -113,7 +112,7 @@ contract BillHookReceiver is IHookReceiver {
         bytes memory hookData = messageBody[OFFSET_HOOK_DATA:];
 
         emit HookValidated(msgSender, amount, hookData);
-        return IHookReceiver.handleReceiveFinalizedMessage.selector;
+        return true;
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────────────

@@ -9,9 +9,11 @@
 - `test/BillHookReceiver.t.sol` — 5 tests: happy path, WrongSender, WrongAmount, priority order, UnauthorizedCaller
 
 **TODO còn lại của Phase 1 (bắt buộc):**
-1. Burn thật từ Base Sepolia → lấy `messageBody` → so offset 68/100/168 với trường thực tế
-2. Xác nhận `returns (bytes4)` đúng với ABI của MessageTransmitterV2 trên Arc Testnet
-3. Nếu offset sai → cập nhật `OFFSET_*` constants trong `BillHookReceiver.sol` + chạy lại test
+1. Burn thật từ Base Sepolia → xác nhận offset bằng dữ liệu on-chain thực tế qua `DebugMessageBody` event log
+
+**Đã giải quyết (không còn TODO):**
+- Offset confirmed từ BurnMessageV2.sol chính thức: 68=amount, 100=messageSender, 228=hookData. Layout V2: maxFee(132), feeExecuted(164), expirationBlock(196), hookData(228+).
+- Return type confirmed từ IMessageHandlerV2.sol: `returns (bool)` — đã sửa từ `bytes4` sai.
 
 ## Security decisions đã chốt
 

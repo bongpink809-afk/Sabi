@@ -47,15 +47,15 @@ contract BillHookReceiverTest is Test {
     function test_ValidMessage_EmitsHookValidated() public {
         bytes memory body = _buildBody(_expectedSenderBytes32(), EXPECTED_AMT);
 
-        // hookData = bytes 168–299 du body — toàn bộ là 0 vì _buildBody chỉ ghi tại offset 68 và 100
-        bytes memory expectedHookData = new bytes(BODY_LEN - 168);
+        // hookData = bytes 228–299 của body — toàn bộ là 0 vì _buildBody chỉ ghi tại offset 68 và 100
+        bytes memory expectedHookData = new bytes(BODY_LEN - 228);
         vm.expectEmit(true, false, false, true, address(hook));
         emit HookValidated(_expectedSenderBytes32(), EXPECTED_AMT, expectedHookData);
 
         vm.prank(TRANSMITTER);
-        bytes4 ret = hook.handleReceiveFinalizedMessage(6, bytes32(0), 500, body);
+        bool ret = hook.handleReceiveFinalizedMessage(6, bytes32(0), 500, body);
 
-        assertEq(ret, IHookReceiver.handleReceiveFinalizedMessage.selector);
+        assertTrue(ret);
     }
 
     // ─── Test 2: Sai sender ───────────────────────────────────────────────────
