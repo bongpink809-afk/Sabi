@@ -68,7 +68,7 @@ contract SabiBillTest is Test {
         vm.prank(organizer);
         vm.expectEmit(true, true, false, true, address(bill));
         emit BillCreated(0, organizer, BillMode.ASSIGNED, ONE_USDC + TWO_USDC);
-        uint256 billId = bill.createAssignedBill(wallets, amounts);
+        uint256 billId = bill.createAssignedBill(amounts);
 
         assertEq(billId, 0);
         Bill memory b = bill.getBill(0);
@@ -78,25 +78,22 @@ contract SabiBillTest is Test {
     }
 
     function test_Assigned_PayShare_AnyCallerOk() public {
-        address[] memory wallets = new address[](1);
-        uint256[] memory amounts = new uint256[](1);
-        wallets[0] = alice;
-        amounts[0] = ONE_USDC;
+    uint256[] memory amounts = new uint256[](1);
+    amounts[0] = ONE_USDC;
 
-        vm.prank(organizer);
-        bill.createAssignedBill(wallets, amounts);
+    vm.prank(organizer);
+    bill.createAssignedBill(amounts);
 
-        uint256 orgBefore = usdc.balanceOf(organizer);
+    uint256 orgBefore = usdc.balanceOf(organizer);
 
-        // stranger (không phải alice) trả vẫn được
-        vm.prank(stranger);
-        vm.expectEmit(true, true, false, true, address(bill));
-        emit SharePaid(0, 0, stranger, ONE_USDC);
-        bill.payShare(0, 0);
+    vm.prank(stranger);
+    vm.expectEmit(true, true, false, true, address(bill));
+    emit SharePaid(0, 0, stranger, ONE_USDC);
+    bill.payShare(0, 0);
 
-        assertEq(usdc.balanceOf(organizer), orgBefore + ONE_USDC);
-        assertTrue(bill.getShare(0, 0).paid);
-    }
+    assertEq(usdc.balanceOf(organizer), orgBefore + ONE_USDC);
+    assertTrue(bill.getShare(0, 0).paid);
+}
 
     function test_Assigned_AlreadyPaid_Reverts() public {
         address[] memory wallets = new address[](1);
@@ -105,7 +102,7 @@ contract SabiBillTest is Test {
         amounts[0] = ONE_USDC;
 
         vm.prank(organizer);
-        bill.createAssignedBill(wallets, amounts);
+        bill.createAssignedBill(amounts);
 
         vm.prank(alice);
         bill.payShare(0, 0);
@@ -116,15 +113,13 @@ contract SabiBillTest is Test {
     }
 
     function test_Assigned_InvalidParams_Reverts() public {
-        address[] memory wallets = new address[](1);
-        uint256[] memory amounts = new uint256[](2); // length mismatch
-        wallets[0] = alice;
-        amounts[0] = ONE_USDC; amounts[1] = TWO_USDC;
+    uint256[] memory amounts = new uint256[](0); // mảng rỗng
 
-        vm.prank(organizer);
-        vm.expectRevert(InvalidBillParams.selector);
-        bill.createAssignedBill(wallets, amounts);
-    }
+    vm.prank(organizer);
+    vm.expectRevert(InvalidBillParams.selector);
+    bill.createAssignedBill(amounts);
+}
+
 
     function test_Assigned_BillNotFound_Reverts() public {
         vm.expectRevert(abi.encodeWithSelector(BillNotFound.selector, 99));
@@ -202,7 +197,7 @@ contract SabiBillTest is Test {
         uint256[] memory amounts = new uint256[](1);
         wallets[0] = alice; amounts[0] = ONE_USDC;
         vm.prank(organizer);
-        bill.createAssignedBill(wallets, amounts);
+        bill.createAssignedBill(amounts);
 
         vm.prank(alice);
         vm.expectRevert(InvalidBillParams.selector);

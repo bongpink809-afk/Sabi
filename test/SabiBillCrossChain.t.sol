@@ -123,7 +123,7 @@ contract SabiBillCrossChainTest is Test {
         wallets[0] = alice;
         amounts[0] = ONE_USDC;
         vm.prank(organizer);
-        uint256 billId = sabiBill.createAssignedBill(wallets, amounts);
+        uint256 billId = sabiBill.createAssignedBill(amounts);
 
         // Mint USDC vào SabiBill (giả lập receiveMessage đã mint)
         usdc.mint(address(sabiBill), ONE_USDC);
@@ -147,7 +147,7 @@ contract SabiBillCrossChainTest is Test {
         wallets[0] = alice;
         amounts[0] = ONE_USDC;
         vm.prank(organizer);
-        uint256 billId = sabiBill.createAssignedBill(wallets, amounts);
+        uint256 billId = sabiBill.createAssignedBill(amounts);
 
         // Lần 1 — thành công
         usdc.mint(address(sabiBill), ONE_USDC);
@@ -167,7 +167,7 @@ contract SabiBillCrossChainTest is Test {
         wallets[0] = alice;
         amounts[0] = ONE_USDC;
         vm.prank(organizer);
-        uint256 billId = sabiBill.createAssignedBill(wallets, amounts);
+        uint256 billId = sabiBill.createAssignedBill(amounts);
 
         usdc.mint(address(sabiBill), 500_000);
         bytes memory hookData = abi.encode(billId, uint256(0));

@@ -33,7 +33,6 @@ error InvalidBillParams();
 enum BillMode { ASSIGNED, OPEN_SLOT }
 
 struct Share {
-    address assignedWallet; // chỉ dùng cho ASSIGNED mode (hiển thị UI), không enforce khi pay
     uint256 amount;
     bool    paid;
 }
@@ -82,14 +81,12 @@ contract SabiBill {
     // ─── Tạo bill ─────────────────────────────────────────────────────────────
 
     /// @notice Tạo bill ASSIGNED — danh sách người + wallet + amount cụ thể.
-    /// @param assignedWallets danh sách ví (chỉ để hiển thị, không enforce khi pay)
     /// @param amounts         số tiền tương ứng mỗi người
     function createAssignedBill(
-        address[] calldata assignedWallets,
-        uint256[] calldata amounts
-    ) external returns (uint256 billId) {
-        if (assignedWallets.length == 0 || assignedWallets.length != amounts.length)
-            revert InvalidBillParams();
+    uint256[] calldata amounts
+) external returns (uint256 billId) {
+    if (amounts.length == 0) revert InvalidBillParams();
+    // bỏ vòng lặp gán assignedWallet, giữ nguyên phần còn lại
 
         billId = _nextBillId++;
 
@@ -97,14 +94,13 @@ contract SabiBill {
         for (uint256 i; i < amounts.length; ++i) {
             if (amounts[i] == 0) revert InvalidBillParams();
             shares[billId][i] = Share({
-                assignedWallet: assignedWallets[i],
                 amount:         amounts[i],
                 paid:           false
             });
             total += amounts[i];
         }
 
-        shareCount[billId] = assignedWallets.length;
+        shareCount[billId] = amounts.length;
 
         bills[billId] = Bill({
             organizer:         msg.sender,
