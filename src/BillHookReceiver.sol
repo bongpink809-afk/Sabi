@@ -21,7 +21,7 @@ event HookValidated(bytes32 indexed messageSender, uint256 amount, bytes hookDat
 
 /// @notice Phát ra raw messageBody để so sánh offset khi test với burn thật.
 ///         TODO: xóa trước Phase 3 — chỉ dùng ở Phase 1.
-event DebugMessageBody(bytes messageBody);
+
 
 // ─── BurnMessageV2 byte offsets ───────────────────────────────────────────────
 //
@@ -89,7 +89,7 @@ contract BillHookReceiver is IHookReceiver {
     ) external override returns (bool) {
         if (msg.sender != messageTransmitter) revert UnauthorizedCaller(msg.sender);
 
-        emit DebugMessageBody(messageBody); // TODO: xóa trước Phase 3
+
 
         bytes32 msgSender = _readBytes32(messageBody, OFFSET_MESSAGE_SENDER);
         uint256 amount    = _readUint256(messageBody, OFFSET_AMOUNT);
