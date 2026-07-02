@@ -2,9 +2,9 @@ import { ConnectButton } from '@rainbow-me/rainbowkit'
 import type { NextPage } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
-import { parseUnits } from 'viem'
+import { parseUnits, parseEventLogs } from 'viem'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
 import { colors } from '../styles/theme'
 
@@ -18,7 +18,7 @@ interface ShareRow {
 const Create: NextPage = () => {
   const router = useRouter()
   const { isConnected } = useAccount()
-  const [step, setStep] = useState<'select' | 'form' | 'confirm' | 'done'>('select')
+  const [step, setStep] = useState<'select' | 'form' | 'confirm'>('select')
   const [mode, setMode] = useState<BillMode>('ASSIGNED')
   const [billName, setBillName] = useState('')
   const [billId, setBillId] = useState<bigint | null>(null)
@@ -31,7 +31,44 @@ const Create: NextPage = () => {
   const [numSlots, setNumSlots] = useState('')
 
   const { writeContract, data: txHash, isPending } = useWriteContract()
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+  const { data: receipt, isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+
+  // Sau khi tx confirm, đọc billId thật từ event BillCreated trong log
+  // (billId không có sẵn trong response tx — phải giải mã log mới lấy được)
+  useEffect(() => {
+    if (!isSuccess || !receipt) return
+    try {
+      const logs = parseEventLogs({
+        abi: SABI_BILL_ABI,
+        logs: receipt.logs,
+        eventName: 'BillCreated',
+      })
+      if (logs.length > 0) {
+        const newBillId = logs[0].args.billId as bigint
+        setBillId(newBillId)
+
+        // Lưu tên các share vào localStorage — contract không lưu tên,
+        // trang /bill/[id] cần đọc lại từ đây để hiện đúng tên thay vì "Share #n"
+        if (mode === 'ASSIGNED') {
+          const namesMap: Record<number, string> = {}
+          shares
+            .filter((s) => s.amount) // chỉ lưu share thật sự được tạo (có amount)
+            .forEach((s, i) => {
+              if (s.name.trim()) namesMap[i] = s.name.trim()
+            })
+          if (Object.keys(namesMap).length > 0) {
+            localStorage.setItem(`sabi-bill-${newBillId.toString()}-names`, JSON.stringify(namesMap))
+          }
+        }
+        // Điều hướng thẳng sang trang chi tiết bill — không dừng ở màn hình link/copy nào cả
+        router.push(`/bill/${newBillId}`)
+      } else {
+        console.error('Không tìm thấy event BillCreated trong log')
+      }
+    } catch (err) {
+      console.error('Lỗi đọc billId từ log:', err)
+    }
+  }, [isSuccess, receipt])
 
   const totalAssigned = shares.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
   const totalOpen = (parseFloat(amountPerSlot) || 0) * (parseInt(numSlots) || 0)
@@ -74,11 +111,6 @@ const Create: NextPage = () => {
     }
   }
 
-  // Khi tx confirm xong → lấy billId từ nextBillId - 1
-  const billUrl = billId !== null && typeof window !== 'undefined'
-    ? `${window.location.origin}/bill/${billId}`
-    : ''
-
   // ── Step 1: Chọn mode ────────────────────────────────────────────────────
   if (step === 'select') return (
     <div style={wrap}>
@@ -107,7 +139,7 @@ const Create: NextPage = () => {
               minHeight: 200,
               textAlign: 'center',
               background: mode === m ? colors.selectedBg : colors.surface,
-              boxShadow: mode === m ? `0 4px 24px ${colors.primary}20` : `0 2px 8px ${colors.shadowSm}`,
+              boxShadow: mode === m ? `0 4px 24px ${colors.primary}20` : `0 2px 8px ${colors.shadowColor}`,
               transition: 'all 0.15s',
             }}
           >
@@ -187,14 +219,15 @@ const Create: NextPage = () => {
     </div>
   )
 
-  // ── Step 3: Confirm ───────────────────────────────────────────────────────
-  if (step === 'confirm') return (
+  // ── Step 3: Confirm ────────────────────────────────────────────────────────
+  return (
     <div style={wrap}>
       <Head><title>Confirm — Sabi</title></Head>
       <nav style={nav}>
         <span style={logo} onClick={() => router.push('/')}>Sabi</span>
         <ConnectButton />
       </nav>
+
       <div style={{ maxWidth: 480, margin: '48px auto', padding: '0 24px' }}>
         <button onClick={() => setStep('form')} style={backBtn}>← Edit</button>
         <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24, color: colors.textPrimary }}>Confirm bill</h2>
@@ -238,45 +271,15 @@ const Create: NextPage = () => {
             style={{ ...primaryBtn, marginTop: 20, width: '100%' }}
             disabled={isPending || isConfirming}
           >
-            {isPending ? 'Confirm in wallet...' : isConfirming ? 'Creating bill...' : 'Create bill'}
+            {isPending
+              ? 'Confirm in wallet...'
+              : isConfirming
+              ? 'Creating bill...'
+              : isSuccess
+              ? 'Redirecting...'
+              : 'Create bill'}
           </button>
         )}
-
-        {isSuccess && (
-          <div style={{ marginTop: 16, padding: 12, background: colors.successBg, borderRadius: 8, fontSize: 13, color: colors.successText }}>
-            ✅ Bill created on-chain!
-            <button onClick={() => setStep('done')} style={{ ...primaryBtn, marginTop: 8, width: '100%' }}>
-              See bill →
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-
-  // ── Step 4: Done ──────────────────────────────────────────────────────────
-  return (
-    <div style={wrap}>
-      <Head><title>Bill created — Sabi</title></Head>
-      <nav style={nav}>
-        <span style={logo} onClick={() => router.push('/')}>Sabi</span>
-        <ConnectButton />
-      </nav>
-      <div style={center}>
-        <div style={{ background: colors.surface, borderRadius: 20, padding: '40px 48px', textAlign: 'center', border: `1px solid ${colors.border}`, maxWidth: 400, width: '100%' }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: colors.textPrimary }}>Bill created!</h2>
-          <p style={{ color: colors.textSecondary, fontSize: 14, marginBottom: 24 }}>Share this link with your group</p>
-          <div style={{ background: colors.backgroundSubtle, border: `1px solid ${colors.border}`, borderRadius: 10, padding: '12px 16px', fontSize: 13, color: colors.primary, wordBreak: 'break-all', marginBottom: 12 }}>
-            {billUrl}
-          </div>
-          <button onClick={() => navigator.clipboard.writeText(billUrl)} style={{ ...ghostBtn, width: '100%', marginBottom: 12 }}>
-            📋 Copy link
-          </button>
-          <button onClick={() => router.push(`/bill/${billId}`)} style={{ ...primaryBtn, width: '100%' }}>
-            View bill →
-          </button>
-        </div>
       </div>
     </div>
   )
