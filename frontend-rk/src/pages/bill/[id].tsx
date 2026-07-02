@@ -3,7 +3,7 @@ import type { NextPage } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi'
 import { formatUnits } from 'viem'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI } from '../../lib/contracts'
 import { colors, radius } from '../../styles/theme'
@@ -12,16 +12,74 @@ import { colors, radius } from '../../styles/theme'
 // → đọc từ localStorage theo billId, set lúc tạo bill ở create.tsx
 type LocalShareNames = Record<number, string>
 
+// 1 lượt góp tiền vào bill OPEN_SLOT — đọc từ event SlotFilled trên chain
+interface Contribution {
+  payer: `0x${string}`
+  amount: bigint
+  matched: boolean
+  txHash: `0x${string}`
+}
+
 const BillDetail: NextPage = () => {
   const router = useRouter()
   const { id } = router.query
   const billId = typeof id === 'string' && id !== '' ? BigInt(id) : undefined
 
   const { address: connectedAddress } = useAccount()
+  const publicClient = usePublicClient()
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
   const [payingShareId, setPayingShareId] = useState<number | null>(null)
   // hash đã confirm của từng share — lưu bền để không mất khi F5 lại trang
   const [paidTxHashes, setPaidTxHashes] = useState<Record<number, `0x${string}`>>({})
+
+  // ─── Danh sách người đã góp (mode OPEN_SLOT) — đọc từ event log trên chain ──
+  const [contributions, setContributions] = useState<Contribution[]>([])
+  const [isLoadingContributions, setIsLoadingContributions] = useState(false)
+  // Tên tự đặt cho từng địa chỉ ví — lưu local theo billId, key là address viết thường
+  const [slotNames, setSlotNames] = useState<Record<string, string>>({})
+  const [contributorName, setContributorName] = useState('')
+
+  const fetchContributions = async () => {
+    if (billId === undefined || !publicClient) return
+    setIsLoadingContributions(true)
+    try {
+      const latestBlock = await publicClient.getBlockNumber()
+      const CHUNK_SIZE = 2000n // RPC Arc Testnet giới hạn số block/lần gọi — quét cả chain 1 lần bị lỗi 413
+      const MAX_CHUNKS = 50 // giới hạn an toàn — không quét quá 100k block về trước, tránh treo nếu chain đã chạy lâu
+      const allLogs: any[] = []
+
+      let toBlock = latestBlock
+      let chunkCount = 0
+      while (toBlock >= 0n && chunkCount < MAX_CHUNKS) {
+        const fromBlock = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : 0n
+        const logs = await publicClient.getContractEvents({
+          address: SABI_BILL_ADDRESS,
+          abi: SABI_BILL_ABI,
+          eventName: 'SlotFilled',
+          args: { billId },
+          fromBlock,
+          toBlock,
+        })
+        allLogs.push(...logs)
+        chunkCount++
+
+        if (fromBlock === 0n) break
+        toBlock = fromBlock - 1n
+      }
+
+      const list: Contribution[] = allLogs.map((log: any) => ({
+        payer: log.args.payer,
+        amount: log.args.amount,
+        matched: log.args.matched,
+        txHash: log.transactionHash,
+      }))
+      setContributions(list)
+    } catch (err) {
+      console.error('Lỗi đọc lịch sử góp tiền:', err)
+    } finally {
+      setIsLoadingContributions(false)
+    }
+  }
 
   // Cho phép người xem tự đặt tên nếu creator chưa đặt lúc tạo bill —
   // lưu local trên máy người đó (mỗi người xem trang này lưu riêng, không đồng bộ nhau)
@@ -77,6 +135,15 @@ const BillDetail: NextPage = () => {
         // bỏ qua nếu hỏng, chỉ là mất link "Xem tx", không ảnh hưởng dữ liệu thật
       }
     }
+    const rawSlotNames = localStorage.getItem(`sabi-bill-${billId.toString()}-slotnames`)
+    if (rawSlotNames) {
+      try {
+        setSlotNames(JSON.parse(rawSlotNames))
+      } catch {
+        // bỏ qua, chỉ hiện địa chỉ ví thay vì tên
+      }
+    }
+    fetchContributions()
   }, [billId])
 
   // ─── Kiểm tra ví đã approve USDC cho contract SabiBill chưa ──────────────
@@ -140,6 +207,7 @@ const BillDetail: NextPage = () => {
   useEffect(() => {
     if (isSlotConfirmed) {
       refetchBill()
+      fetchContributions()
     }
   }, [isSlotConfirmed])
 
@@ -156,6 +224,12 @@ const BillDetail: NextPage = () => {
 
   const handlePaySlot = () => {
     if (billId === undefined || !bill) return
+    // Lưu tên tự đặt (nếu có) cho địa chỉ ví đang trả — chỉ hiện đúng trên máy người này
+    if (connectedAddress && contributorName.trim()) {
+      const next = { ...slotNames, [connectedAddress.toLowerCase()]: contributorName.trim() }
+      setSlotNames(next)
+      localStorage.setItem(`sabi-bill-${billId.toString()}-slotnames`, JSON.stringify(next))
+    }
     paySlot({
       address: SABI_BILL_ADDRESS,
       abi: SABI_BILL_ABI,
@@ -254,6 +328,11 @@ const BillDetail: NextPage = () => {
               payTxHash={paySlotTx}
               paySuccess={isSlotConfirmed}
               payError={paySlotError}
+              contributions={contributions}
+              isLoadingContributions={isLoadingContributions}
+              slotNames={slotNames}
+              contributorName={contributorName}
+              onChangeContributorName={setContributorName}
             />
           )}
         </div>
@@ -553,6 +632,11 @@ function OpenSlotInfo({
   payTxHash,
   paySuccess,
   payError,
+  contributions,
+  isLoadingContributions,
+  slotNames,
+  contributorName,
+  onChangeContributorName,
 }: {
   amountPerSlot: bigint
   matchedSlotsCount: number
@@ -567,6 +651,11 @@ function OpenSlotInfo({
   payTxHash: `0x${string}` | undefined
   paySuccess: boolean
   payError: Error | null
+  contributions: Contribution[]
+  isLoadingContributions: boolean
+  slotNames: Record<string, string>
+  contributorName: string
+  onChangeContributorName: (name: string) => void
 }) {
   const amount = formatUnits(amountPerSlot, 6)
   const extra = formatUnits(extraReceived, 6)
@@ -596,6 +685,25 @@ function OpenSlotInfo({
           </div>
         )}
       </div>
+
+      {/* Ô nhập tên tùy chọn — chỉ lưu trên máy người này, để mọi người biết ai đã góp */}
+      {!needsApprove && !paySuccess && (
+        <input
+          value={contributorName}
+          onChange={(e) => onChangeContributorName(e.target.value)}
+          placeholder="Tên của bạn (tùy chọn, hiện trong danh sách bên dưới)"
+          style={{
+            width: '100%',
+            fontSize: 13,
+            padding: '8px 12px',
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            outline: 'none',
+            marginBottom: 8,
+            boxSizing: 'border-box',
+          }}
+        />
+      )}
 
       {needsApprove ? (
         <>
@@ -676,6 +784,65 @@ function OpenSlotInfo({
           Lỗi: {payError.message.split('\n')[0]}
         </p>
       )}
+
+      {/* Danh sách người đã góp — đọc từ event SlotFilled trên chain */}
+      <div style={{ marginTop: 20 }}>
+        <div style={{ color: colors.textSecondary, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+          Người đã góp {contributions.length > 0 && `(${contributions.length})`}
+        </div>
+
+        {isLoadingContributions && contributions.length === 0 && (
+          <p style={{ color: colors.textMuted, fontSize: 12 }}>Đang tải...</p>
+        )}
+
+        {!isLoadingContributions && contributions.length === 0 && (
+          <p style={{ color: colors.textMuted, fontSize: 12 }}>Chưa có ai góp tiền.</p>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {contributions.map((c, i) => {
+            const displayName = slotNames[c.payer.toLowerCase()]
+            const shortAddress = `${c.payer.slice(0, 6)}...${c.payer.slice(-4)}`
+            return (
+              <div
+                key={`${c.txHash}-${i}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  background: colors.backgroundSubtle,
+                  borderRadius: 6,
+                  fontSize: 12,
+                }}
+              >
+                <div>
+                  <div style={{ color: colors.textPrimary, fontWeight: 600 }}>
+                    {displayName ?? shortAddress}
+                    {!c.matched && (
+                      <span style={{ color: colors.warning, fontWeight: 400, marginLeft: 6 }}>(lệch số tiền)</span>
+                    )}
+                  </div>
+                  <a
+                    href={`https://testnet.arcscan.app/tx/${c.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: colors.primary,
+                      fontSize: 11,
+                      textDecoration: 'underline',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    }}
+                  >
+                    {c.txHash.slice(0, 8)}...{c.txHash.slice(-6)}
+                  </a>
+                </div>
+                <div style={{ color: colors.textSecondary, fontWeight: 600 }}>{formatUnits(c.amount, 6)} USDC</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
