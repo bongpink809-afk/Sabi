@@ -1,11 +1,15 @@
+import { CrossChainState } from '../../hooks/useCrossChainPayment'
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient, useSwitchChain } from 'wagmi'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import type { NextPage } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi'
 import { formatUnits } from 'viem'
-import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI } from '../../lib/contracts'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia } from '../../lib/contracts'
+import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
+import { arcTestnet } from '../../wagmi'
+import { useCrossChainPayment } from '../../hooks/useCrossChainPayment'
 import { colors, radius } from '../../styles/theme'
 
 // Tên người tham gia chỉ lưu ở frontend (contract không lưu tên, chỉ lưu amount)
@@ -26,7 +30,11 @@ const BillDetail: NextPage = () => {
   const billId = typeof id === 'string' && id !== '' ? BigInt(id) : undefined
 
   const { address: connectedAddress } = useAccount()
-  const publicClient = usePublicClient()
+  const { switchChainAsync } = useSwitchChain()
+  const { chainId: currentChainId } = useAccount()
+  const payMethod: 'arc' | 'base' | 'unsupported' =
+  currentChainId === arcTestnet.id ? 'arc' : currentChainId === baseSepolia.id ? 'base' : 'unsupported'
+  const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
   const [payingShareId, setPayingShareId] = useState<number | null>(null)
   // hash đã confirm của từng share — lưu bền để không mất khi F5 lại trang
@@ -38,6 +46,8 @@ const BillDetail: NextPage = () => {
   // Tên tự đặt cho từng địa chỉ ví — lưu local theo billId, key là address viết thường
   const [slotNames, setSlotNames] = useState<Record<string, string>>({})
   const [contributorName, setContributorName] = useState('')
+
+
 
   const fetchContributions = async () => {
     if (billId === undefined || !publicClient) return
@@ -101,6 +111,7 @@ const BillDetail: NextPage = () => {
     abi: SABI_BILL_ABI,
     functionName: 'getBill',
     args: billId !== undefined ? [billId] : undefined,
+    chainId: arcTestnet.id,
     query: { enabled: billId !== undefined },
   })
 
@@ -113,6 +124,7 @@ const BillDetail: NextPage = () => {
     abi: SABI_BILL_ABI,
     functionName: 'shareCount',
     args: billId !== undefined ? [billId] : undefined,
+    chainId: arcTestnet.id,
     query: { enabled: billId !== undefined && mode === 'ASSIGNED' },
   })
 
@@ -152,6 +164,7 @@ const BillDetail: NextPage = () => {
     abi: ERC20_ABI,
     functionName: 'allowance',
     args: connectedAddress ? [connectedAddress, SABI_BILL_ADDRESS] : undefined,
+    chainId: arcTestnet.id,
     query: { enabled: !!connectedAddress },
   })
 
@@ -165,12 +178,16 @@ const BillDetail: NextPage = () => {
   }, [isApproveConfirmed, refetchAllowance])
 
   // Approve số lớn (max uint256) 1 lần — khỏi phải approve lại mỗi lần trả tiền
-  const handleApprove = () => {
+  const handleApprove = async () => {
+    if (currentChainId !== arcTestnet.id) {
+      await switchChainAsync({ chainId: arcTestnet.id })
+    }
     approve({
       address: ARC_USDC_ADDRESS,
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [SABI_BILL_ADDRESS, 2n ** 256n - 1n],
+      chainId: arcTestnet.id,
     })
   }
 
@@ -182,6 +199,8 @@ const BillDetail: NextPage = () => {
 
 
   const { writeContract: payShare, data: payShareTx, isPending: isPayingShare, error: payShareError } = useWriteContract()
+  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay } = useCrossChainPayment(billId ?? 0n, payingShareId ?? undefined)
+  const [lastCrossChainAmount, setLastCrossChainAmount] = useState<bigint | null>(null)
   const { isLoading: isConfirmingShare, isSuccess: isShareConfirmed } = useWaitForTransactionReceipt({
     hash: payShareTx,
   })
@@ -211,20 +230,31 @@ const BillDetail: NextPage = () => {
     }
   }, [isSlotConfirmed])
 
-  const handlePayShare = (shareId: number) => {
+  const handlePayShare = async (shareId: number, amount: bigint) => {
     if (billId === undefined) return
+    if (payMethod === 'unsupported') {
+      alert('Vui lòng đổi ví sang Arc Testnet hoặc Base Sepolia trước khi trả tiền')
+      return
+    }
     setPayingShareId(shareId)
+
+    if (payMethod === 'base') {
+      setLastCrossChainAmount(amount)
+      await startCrossChainPay(amount)
+      return
+    }
+
     payShare({
       address: SABI_BILL_ADDRESS,
       abi: SABI_BILL_ABI,
       functionName: 'payShare',
       args: [billId, BigInt(shareId)],
+      chainId: arcTestnet.id,
     })
   }
 
   const handlePaySlot = () => {
     if (billId === undefined || !bill) return
-    // Lưu tên tự đặt (nếu có) cho địa chỉ ví đang trả — chỉ hiện đúng trên máy người này
     if (connectedAddress && contributorName.trim()) {
       const next = { ...slotNames, [connectedAddress.toLowerCase()]: contributorName.trim() }
       setSlotNames(next)
@@ -235,6 +265,7 @@ const BillDetail: NextPage = () => {
       abi: SABI_BILL_ABI,
       functionName: 'paySlot',
       args: [billId, bill.amountPerSlot],
+      chainId: arcTestnet.id,
     })
   }
 
@@ -271,8 +302,10 @@ const BillDetail: NextPage = () => {
           padding: '24px 16px',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'flex-end', maxWidth: 480, margin: '0 auto 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', maxWidth: 480, margin: '0 auto 16px', gap: 8 }}>
+           
           <ConnectButton />
+      
         </div>
 
         <div
@@ -310,6 +343,9 @@ const BillDetail: NextPage = () => {
               payTxHash={payShareTx}
               paySuccess={isShareConfirmed}
               payError={payShareError}
+              ccState={payMethod === 'base' ? ccState : null}
+              onRetryCrossChain={() => lastCrossChainAmount && startCrossChainPay(lastCrossChainAmount)}
+              onDismissCrossChain={resetCrossChainPay}
             />
           )}
 
@@ -382,12 +418,15 @@ function AssignedShares({
   payTxHash,
   paySuccess,
   payError,
+  ccState,
+  onRetryCrossChain,
+  onDismissCrossChain,
 }: {
   billId: bigint
   shareCount: number
   shareNames: LocalShareNames
   connectedAddress: `0x${string}` | undefined
-  onPay: (shareId: number) => void
+  onPay: (shareId: number, amount: bigint) => void
   isPaying: boolean
   payingShareId: number | null
   paidTxHashes: Record<number, `0x${string}`>
@@ -399,6 +438,9 @@ function AssignedShares({
   payTxHash: `0x${string}` | undefined
   paySuccess: boolean
   payError: Error | null
+  ccState: CrossChainState | null
+  onRetryCrossChain: () => void
+  onDismissCrossChain: () => void
 }) {
   const shareIds = Array.from({ length: shareCount }, (_, i) => i)
 
@@ -409,6 +451,7 @@ function AssignedShares({
         const savedHash = paidTxHashes[shareId]
         const displayHash = isThisRowPaying ? payTxHash : savedHash
         const displaySuccess = isThisRowPaying ? paySuccess : !!savedHash
+        const isCrossChainBusy = ccState !== null && !['idle', 'success', 'error'].includes(ccState.status)
 
         return (
           <ShareRow
@@ -426,6 +469,9 @@ function AssignedShares({
             payTxHash={displayHash}
             paySuccess={displaySuccess}
             payError={isThisRowPaying ? payError : null}
+            ccState={isThisRowPaying ? ccState : null}
+            onRetryCrossChain={onRetryCrossChain}
+            onDismissCrossChain={onDismissCrossChain}
           />
         )
       })}
@@ -447,12 +493,15 @@ function ShareRow({
   payTxHash,
   paySuccess,
   payError,
+  ccState,
+  onRetryCrossChain,
+  onDismissCrossChain,
 }: {
   billId: bigint
   shareId: number
   name: string | undefined
   onUpdateName: (shareId: number, name: string) => void
-  onPay: (shareId: number) => void
+  onPay: (shareId: number, amount: bigint) => void
   isPaying: boolean
   hasAllowance: (amountNeeded: bigint) => boolean
   onApprove: () => void
@@ -461,6 +510,9 @@ function ShareRow({
   payTxHash: `0x${string}` | undefined
   paySuccess: boolean
   payError: Error | null
+  ccState: CrossChainState | null
+  onRetryCrossChain: () => void
+  onDismissCrossChain: () => void
 }) {
   const [nameDraft, setNameDraft] = useState('')
 
@@ -468,6 +520,7 @@ function ShareRow({
     address: SABI_BILL_ADDRESS,
     abi: SABI_BILL_ABI,
     functionName: 'getShare',
+    chainId: arcTestnet.id,
     args: [billId, BigInt(shareId)],
   })
 
@@ -476,6 +529,8 @@ function ShareRow({
   }, [paySuccess])
 
   if (!share) return null
+
+  const isCrossChainBusy = ccState !== null && !['idle', 'success', 'error'].includes(ccState.status)
 
   const amount = formatUnits(share.amount, 6)
   const needsApprove = isWalletConnected && !hasAllowance(share.amount)
@@ -568,22 +623,23 @@ function ShareRow({
             {isApproving ? 'Đang approve...' : 'Cho phép dùng USDC'}
           </button>
         ) : (
-          <button
-            onClick={() => onPay(shareId)}
-            disabled={isPaying || !isWalletConnected}
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#fff',
-              background: isPaying || !isWalletConnected ? colors.textMuted : colors.primary,
-              border: 'none',
-              borderRadius: radius.button,
-              padding: '8px 14px',
-              cursor: isPaying || !isWalletConnected ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {isPaying ? 'Đang xử lý...' : 'Trả tiền'}
-          </button>
+          
+         <button
+          onClick={() => onPay(shareId, share.amount)}
+          disabled={isPaying || !isWalletConnected || isCrossChainBusy}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: '#fff',
+            background: isPaying || !isWalletConnected || isCrossChainBusy ? colors.textMuted : colors.primary,
+            border: 'none',
+            borderRadius: radius.button,
+            padding: '8px 14px',
+            cursor: isPaying || !isWalletConnected || isCrossChainBusy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {isCrossChainBusy ? 'Đang xử lý...' : isPaying ? 'Đang xử lý...' : 'Trả tiền'}
+        </button>
         )}
       </div>
 
@@ -613,6 +669,13 @@ function ShareRow({
       )}
       {payError && (
         <p style={{ color: colors.danger, fontSize: 11, marginTop: 6 }}>Lỗi: {payError.message.split('\n')[0]}</p>
+       )}
+        {!isPaid && ccState && ccState.status !== 'idle' && (
+        <CrossChainStatusPanel
+          state={ccState}
+          onRetry={onRetryCrossChain}
+          onDismiss={onDismissCrossChain}
+        />
       )}
     </div>
   )

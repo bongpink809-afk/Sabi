@@ -1,17 +1,21 @@
 # MEMORY.md — Sabi project state
 
 ## Phase 1: CCTP Hook isolation test
+
 **Trạng thái:** Code + 5 unit test xong, pass hết. **Chưa hoàn tất** — còn 1 việc bắt buộc: verify BurnMessageV2 byte offsets bằng burn thật từ Base Sepolia (dùng `DebugMessageBody` event log để so offset 68/100/168 với dữ liệu thực tế).
 
 **Files Phase 1:**
+
 - `src/interfaces/IHookReceiver.sol` — CCTP V2 hook interface (`handleReceiveFinalizedMessage` trả `bytes4`)
 - `src/BillHookReceiver.sol` — isolated hook receiver, stateless, có `DebugMessageBody` event (TODO: xóa trước Phase 3)
 - `test/BillHookReceiver.t.sol` — 5 tests: happy path, WrongSender, WrongAmount, priority order, UnauthorizedCaller
 
 **TODO còn lại của Phase 1 (bắt buộc):**
+
 1. Burn thật từ Base Sepolia → xác nhận offset bằng dữ liệu on-chain thực tế qua `DebugMessageBody` event log
 
 **Đã giải quyết (không còn TODO):**
+
 - Offset confirmed từ BurnMessageV2.sol chính thức: 68=amount, 100=messageSender, 228=hookData. Layout V2: maxFee(132), feeExecuted(164), expirationBlock(196), hookData(228+).
 - Return type confirmed từ IMessageHandlerV2.sol: `returns (bool)` — đã sửa từ `bytes4` sai.
 
@@ -23,13 +27,13 @@
 
 ## Network config (Arc Testnet)
 
-| Field | Value |
-|---|---|
-| Chain ID | 5042002 |
-| USDC | `0x3600000000000000000000000000000000000000` |
-| CCTP Domain | 26 |
-| RPC | `https://rpc.testnet.arc.network` |
-| Explorer | `https://testnet.arcscan.app` |
+| Field       | Value                                        |
+| ----------- | -------------------------------------------- |
+| Chain ID    | 5042002                                      |
+| USDC        | `0x3600000000000000000000000000000000000000` |
+| CCTP Domain | 26                                           |
+| RPC         | `https://rpc.testnet.arc.network`            |
+| Explorer    | `https://testnet.arcscan.app`                |
 
 CCTP V2 ONLY — V1 deprecated 31/7/2026. Fast Transfer (`minFinalityThreshold ≤ 500`).
 
@@ -53,3 +57,5 @@ CCTP V2 ONLY — V1 deprecated 31/7/2026. Fast Transfer (`minFinalityThreshold �
 ## Spec đầy đủ
 
 Xem `spec/split-bill-dapp-spec.md` — 9 mục: tổng quan, 2 mode bill, luồng sử dụng, QR, data model, CCTP hook, network config, rủi ro, roadmap.
+
+TODO: lấy raw message thật qua Iris API (tx burn 0xe987e3d62e...) → viết test/BillHookReceiverRealData.t.sol → xóa DebugMessageBody → đóng Phase 1

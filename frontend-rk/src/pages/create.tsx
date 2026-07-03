@@ -1,3 +1,4 @@
+import { arcTestnet } from '../wagmi'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import type { NextPage } from 'next'
 import Head from 'next/head'
@@ -22,6 +23,8 @@ const Create: NextPage = () => {
   const [mode, setMode] = useState<BillMode>('ASSIGNED')
   const [billName, setBillName] = useState('')
   const [billId, setBillId] = useState<bigint | null>(null)
+  const { chainId: currentChainId } = useAccount()
+  const isWrongNetwork = currentChainId !== undefined && currentChainId !== arcTestnet.id
 
   const [shares, setShares] = useState<ShareRow[]>([
     { name: '', amount: '' },
@@ -94,6 +97,7 @@ const Create: NextPage = () => {
           abi: SABI_BILL_ABI,
           functionName: 'createAssignedBill',
           args: [amounts],
+          chainId: arcTestnet.id,
         })
       } else {
         writeContract({
@@ -104,6 +108,7 @@ const Create: NextPage = () => {
             parseUnits(amountPerSlot, 6),
             BigInt(parseInt(numSlots)),
           ],
+          chainId: arcTestnet.id,
         })
       }
     } catch (e) {
@@ -255,6 +260,11 @@ const Create: NextPage = () => {
             </>
           )}
         </div>
+        {isWrongNetwork && (
+            <p style={{ color: colors.danger, fontSize: 13, marginBottom: 8, textAlign: 'center' }}>
+              ⚠️ Ví đang ở sai mạng — đổi sang <strong>Arc Testnet</strong> để tạo bill
+            </p>
+          )}
 
         <p style={{ fontSize: 13, color: colors.warning, marginTop: 12 }}>⚠ Cannot be edited after creation.</p>
 
@@ -267,18 +277,20 @@ const Create: NextPage = () => {
 
         {isConnected && (
           <button
-            onClick={handleCreate}
-            style={{ ...primaryBtn, marginTop: 20, width: '100%' }}
-            disabled={isPending || isConfirming}
-          >
-            {isPending
-              ? 'Confirm in wallet...'
-              : isConfirming
-              ? 'Creating bill...'
-              : isSuccess
-              ? 'Redirecting...'
-              : 'Create bill'}
-          </button>
+          onClick={handleCreate}
+          style={{ ...primaryBtn, marginTop: 20, width: '100%' }}
+          disabled={isPending || isConfirming || isWrongNetwork}
+        >
+          {isWrongNetwork
+            ? 'Đổi sang Arc Testnet để tạo bill'
+            : isPending
+            ? 'Confirm in wallet...'
+            : isConfirming
+            ? 'Creating bill...'
+            : isSuccess
+            ? 'Redirecting...'
+            : 'Create bill'}
+        </button>
         )}
       </div>
     </div>
