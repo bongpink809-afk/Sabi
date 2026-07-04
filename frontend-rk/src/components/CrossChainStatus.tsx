@@ -1,7 +1,17 @@
 import { CrossChainState } from '../hooks/useCrossChainPayment'
 import { colors, radius } from '../styles/theme'
 
-// D1 — Pending attestation: hiện khi đang chờ Circle ký xác nhận sau khi đã burn xong trên Base Sepolia
+// Tên hiển thị + explorer URL theo từng chain nguồn — thêm chain mới chỉ cần thêm 1 dòng
+const SOURCE_CHAIN_DISPLAY = {
+  base: { name: 'Base Sepolia', explorerBase: 'https://sepolia.basescan.org/tx/' },
+  arbitrum: { name: 'Arbitrum Sepolia', explorerBase: 'https://sepolia.arbiscan.io/tx/' },
+} as const
+
+function getChainDisplay(sourceChain: CrossChainState['sourceChain']) {
+  return sourceChain ? SOURCE_CHAIN_DISPLAY[sourceChain] : { name: 'chain nguồn', explorerBase: '#' }
+}
+
+// D1 — Pending attestation: hiện khi đang chờ Circle ký xác nhận sau khi đã burn xong
 // D2 — Error: hiện 1 trong 4 case, mỗi case có message + hành động phù hợp riêng
 export function CrossChainStatusPanel({
   state,
@@ -12,6 +22,8 @@ export function CrossChainStatusPanel({
   onRetry: () => void
   onDismiss: () => void
 }) {
+  const chainDisplay = getChainDisplay(state.sourceChain)
+
   if (state.status === 'checking_balance' || state.status === 'burning') {
     return (
       <Panel>
@@ -30,12 +42,12 @@ export function CrossChainStatusPanel({
           ⏳ Đang xử lý...
         </p>
         <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8 }}>
-          Burn tx đã xác nhận trên Base Sepolia.
+          Burn tx đã xác nhận trên {chainDisplay.name}.
         </p>
         {state.burnTxHash && (
           
- <a 
-            href={`https://sepolia.basescan.org/tx/${state.burnTxHash}`}
+<a
+            href={`${chainDisplay.explorerBase}${state.burnTxHash}`}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -64,7 +76,7 @@ export function CrossChainStatusPanel({
 
   // ─── D2 — Error, 4 case ──────────────────────────────────────────────────
   if (state.status === 'error') {
-    const { title, description, showRetry } = getErrorContent(state)
+    const { title, description, showRetry } = getErrorContent(state, chainDisplay.name)
     return (
       <Panel isError>
         <p style={{ color: colors.danger, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{title}</p>
@@ -72,7 +84,7 @@ export function CrossChainStatusPanel({
         {state.errorType === 'relay_failed' && state.burnTxHash && (
           
 <a
-            href={`https://sepolia.basescan.org/tx/${state.burnTxHash}`}
+            href={`${chainDisplay.explorerBase}${state.burnTxHash}`}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -104,12 +116,12 @@ export function CrossChainStatusPanel({
   return null
 }
 
-function getErrorContent(state: CrossChainState) {
+function getErrorContent(state: CrossChainState, chainName: string) {
   switch (state.errorType) {
     case 'insufficient_balance':
       return {
         title: 'Số dư không đủ',
-        description: state.errorMessage ?? 'Số dư USDC trên Base Sepolia không đủ để trả.',
+        description: state.errorMessage ?? `Số dư USDC trên ${chainName} không đủ để trả.`,
         showRetry: true,
       }
     case 'user_rejected':
@@ -121,14 +133,13 @@ function getErrorContent(state: CrossChainState) {
     case 'burn_reverted':
       return {
         title: 'Giao dịch burn thất bại',
-        description: state.errorMessage ?? 'Giao dịch trên Base Sepolia bị revert.',
+        description: state.errorMessage ?? `Giao dịch trên ${chainName} bị revert.`,
         showRetry: true,
       }
     case 'relay_failed':
       return {
         title: 'Không hoàn tất được — cần hỗ trợ',
-        description:
-          'Tiền đã burn thành công trên Base Sepolia nhưng chưa ghi nhận được trên Arc. Giữ lại mã tx bên dưới, liên hệ hỗ trợ để xử lý thủ công.',
+        description: `Tiền đã burn thành công trên ${chainName} nhưng chưa ghi nhận được trên Arc. Giữ lại mã tx bên dưới, liên hệ hỗ trợ để xử lý thủ công.`,
         showRetry: false,
       }
     default:

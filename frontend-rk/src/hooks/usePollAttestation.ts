@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef } from 'react'
-import { BASE_SEPOLIA_DOMAIN } from '../lib/contracts'
 
 // Response format từ Iris API — chỉ lấy field cần dùng
 interface IrisMessage {
@@ -30,7 +29,9 @@ export function usePollAttestation() {
   // dùng ref để hàm stop() gọi từ ngoài cắt được vòng lặp đang chạy dở
   const stopRef = useRef(false)
 
-  const poll = useCallback(async (burnTxHash: `0x${string}`): Promise<AttestationResult> => {
+  // domain: domain CCTP của CHAIN NGUỒN (nơi đã burn) — Base Sepolia = 6, Arbitrum Sepolia = 3
+  // KHÔNG được hard-code, vì mỗi chain nguồn có domain khác nhau
+  const poll = useCallback(async (burnTxHash: `0x${string}`, domain: number): Promise<AttestationResult> => {
     setIsPolling(true)
     stopRef.current = false
 
@@ -41,7 +42,7 @@ export function usePollAttestation() {
         }
 
         const res = await fetch(
-          `${IRIS_API_BASE}/v2/messages/${BASE_SEPOLIA_DOMAIN}?transactionHash=${burnTxHash}`
+          `${IRIS_API_BASE}/v2/messages/${domain}?transactionHash=${burnTxHash}`
         )
 
         // 404 nghĩa là Circle chưa index tx này — bình thường ở vài lần poll đầu, không phải lỗi
