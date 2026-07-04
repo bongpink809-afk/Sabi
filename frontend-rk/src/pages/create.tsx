@@ -55,7 +55,7 @@ const Create: NextPage = () => {
         if (mode === 'ASSIGNED') {
           const namesMap: Record<number, string> = {}
           shares
-            .filter((s) => s.amount) // chỉ lưu share thật sự được tạo (có amount)
+            .filter((s) => s.amount)
             .forEach((s, i) => {
               if (s.name.trim()) namesMap[i] = s.name.trim()
             })
@@ -63,6 +63,12 @@ const Create: NextPage = () => {
             localStorage.setItem(`sabi-bill-${newBillId.toString()}-names`, JSON.stringify(namesMap))
           }
         }
+
+        // Lưu tên bill — contract không có field này, chỉ lưu frontend
+        if (billName.trim()) {
+          localStorage.setItem(`sabi-bill-${newBillId.toString()}-title`, billName.trim())
+        }
+
         // Điều hướng thẳng sang trang chi tiết bill — không dừng ở màn hình link/copy nào cả
         router.push(`/bill/${newBillId}`)
       } else {

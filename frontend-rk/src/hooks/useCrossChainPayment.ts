@@ -26,7 +26,7 @@ export type CrossChainErrorType =
   | 'insufficient_balance'
   | 'user_rejected'
   | 'burn_reverted'
-  | 'relay_failed' // attestation timeout hoặc payCrossChain revert — tiền đã burn, cần lưu vết
+  | 'relay_failed'
 
 export interface CrossChainState {
   status: CrossChainStatus
@@ -39,18 +39,27 @@ export interface CrossChainState {
   errorMessage?: string
 }
 
-// Cấu hình theo từng chain nguồn — thêm chain mới chỉ cần thêm 1 dòng vào đây
 const BALANCE_CHECK_CONFIG = {
   base: { chainId: baseSepolia.id, usdcAddress: BASE_SEPOLIA_USDC_ADDRESS },
   arbitrum: { chainId: arbitrumSepolia.id, usdcAddress: ARBITRUM_SEPOLIA_USDC_ADDRESS },
 } as const
 
-const getStorageKey = (billId: string, shareId?: number) =>
-  `sabi_crosschain_${billId}_${shareId ?? 'openslot'}`
+// OPEN_SLOT (shareId undefined) — ai cũng trả được, phải phân biệt theo địa chỉ ví,
+// nếu không 2 ví khác nhau trên cùng máy sẽ đọc nhầm hash của nhau.
+// ASSIGNED (có shareId) — mỗi share đã gắn cứng 1 ví, không cần phân biệt thêm.
+const getStorageKey = (billId: string, shareId: number | undefined, address: `0x${string}` | undefined) => {
+  if (shareId !== undefined) return `sabi_crosschain_${billId}_${shareId}`
+  const addressPart = address ? address.toLowerCase() : 'noaddress'
+  return `sabi_crosschain_${billId}_openslot_${addressPart}`
+}
 
-function loadState(billId: string, shareId?: number): CrossChainState | null {
+function loadState(
+  billId: string,
+  shareId: number | undefined,
+  address: `0x${string}` | undefined
+): CrossChainState | null {
   if (typeof window === 'undefined') return null
-  const raw = localStorage.getItem(getStorageKey(billId, shareId))
+  const raw = localStorage.getItem(getStorageKey(billId, shareId, address))
   if (!raw) return null
   try {
     return JSON.parse(raw) as CrossChainState
@@ -59,14 +68,14 @@ function loadState(billId: string, shareId?: number): CrossChainState | null {
   }
 }
 
-function saveState(state: CrossChainState) {
+function saveState(state: CrossChainState, address: `0x${string}` | undefined) {
   if (typeof window === 'undefined') return
-  localStorage.setItem(getStorageKey(state.billId, state.shareId), JSON.stringify(state))
+  localStorage.setItem(getStorageKey(state.billId, state.shareId, address), JSON.stringify(state))
 }
 
-function clearState(billId: string, shareId?: number) {
+function clearState(billId: string, shareId: number | undefined, address: `0x${string}` | undefined) {
   if (typeof window === 'undefined') return
-  localStorage.removeItem(getStorageKey(billId, shareId))
+  localStorage.removeItem(getStorageKey(billId, shareId, address))
 }
 
 function classifyError(err: unknown): { type: CrossChainErrorType; message: string } {
@@ -95,16 +104,19 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
   const billIdStr = billId.toString()
 
   const [state, setState] = useState<CrossChainState>(() => {
-    return loadState(billIdStr, shareId) ?? { status: 'idle', billId: billIdStr, shareId }
+    return loadState(billIdStr, shareId, address) ?? { status: 'idle', billId: billIdStr, shareId }
   })
 
-  const updateState = useCallback((next: Partial<CrossChainState>) => {
-    setState((prev) => {
-      const merged = { ...prev, ...next }
-      saveState(merged)
-      return merged
-    })
-  }, [])
+  const updateState = useCallback(
+    (next: Partial<CrossChainState>) => {
+      setState((prev) => {
+        const merged = { ...prev, ...next }
+        saveState(merged, address)
+        return merged
+      })
+    },
+    [address]
+  )
 
   const continueFromAttestation = async (burnTxHash: `0x${string}`, sourceChain: SourceChain) => {
     try {
@@ -113,12 +125,11 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
       updateState({ status: 'relaying' })
       const relayTxHash = await relay(message, attestation)
       updateState({ status: 'success', relayTxHash })
-      clearState(billIdStr, shareId)
+      clearState(billIdStr, shareId, address)
     } catch (err) {
       const { type, message } = classifyError(err)
       if (type === 'user_rejected') {
-        // Từ chối ký — không mất gì, lặng lẽ về trạng thái ban đầu, không hiện cảnh báo
-        clearState(billIdStr, shareId)
+        clearState(billIdStr, shareId, address)
         setState({ status: 'idle', billId: billIdStr, shareId })
         return
       }
@@ -126,28 +137,24 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     }
   }
 
-    // Load lại state khi billId/shareId đổi (Next.js: billId có thể tạm là 0n ở lần render đầu,
-    // cần tự sửa lại billId đúng trong state khi giá trị thật từ URL xuất hiện)
-    // + tự tiếp tục poll nếu đang dở waiting_attestation
-    useEffect(() => {
-      const saved = loadState(billIdStr, shareId)
-      const nextState = saved ?? { status: 'idle' as const, billId: billIdStr, shareId }
-      setState(nextState)
-      if (nextState.status === 'waiting_attestation' && nextState.burnTxHash && nextState.sourceChain) {
-        continueFromAttestation(nextState.burnTxHash, nextState.sourceChain)
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [billIdStr, shareId])
+  // Load lại state khi billId/shareId/address đổi (đổi ví cũng phải load lại đúng "ô nhớ" của ví đó)
+  useEffect(() => {
+    const saved = loadState(billIdStr, shareId, address)
+    const nextState = saved ?? { status: 'idle' as const, billId: billIdStr, shareId }
+    setState(nextState)
+    if (nextState.status === 'waiting_attestation' && nextState.burnTxHash && nextState.sourceChain) {
+      continueFromAttestation(nextState.burnTxHash, nextState.sourceChain)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billIdStr, shareId, address])
 
-  // sourceChain giờ bắt buộc truyền vào — cho biết burn từ Base Sepolia hay Arbitrum Sepolia
-      const start = async (amount: bigint, sourceChain: SourceChain, shareIdOverride?: number) => {
-      const effectiveShareId = shareIdOverride !== undefined ? shareIdOverride : shareId
-      updateState({ status: 'checking_balance', sourceChain })
-      try {
+  const start = async (amount: bigint, sourceChain: SourceChain, shareIdOverride?: number) => {
+    const effectiveShareId = shareIdOverride !== undefined ? shareIdOverride : shareId
+    updateState({ status: 'checking_balance', sourceChain })
+    try {
       const config = BALANCE_CHECK_CONFIG[sourceChain]
       const publicClient = sourceChain === 'base' ? publicClientBase : publicClientArbitrum
 
-      // Guard: check balance TRƯỚC khi mở ví ký — tránh user ký xong mới biết thiếu tiền
       if (address && publicClient) {
         const balance = (await publicClient.readContract({
           address: config.usdcAddress,
@@ -167,7 +174,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
 
       updateState({ status: 'burning' })
 
-      const BURN_TIMEOUT_MS = 45000 // 45 giây không phản hồi → coi như huỷ
+      const BURN_TIMEOUT_MS = 45000
       const burnTxHash = await Promise.race([
         burn({ sourceChain, amount, billId, shareId: effectiveShareId }),
         new Promise<never>((_, reject) =>
@@ -181,7 +188,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     } catch (err) {
       const { type, message } = classifyError(err)
       if (type === 'user_rejected') {
-        clearState(billIdStr, shareId)
+        clearState(billIdStr, shareId, address)
         setState({ status: 'idle', billId: billIdStr, shareId })
         return
       }
@@ -190,7 +197,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
   }
 
   const reset = () => {
-    clearState(billIdStr, shareId)
+    clearState(billIdStr, shareId, address)
     setState({ status: 'idle', billId: billIdStr, shareId })
   }
 

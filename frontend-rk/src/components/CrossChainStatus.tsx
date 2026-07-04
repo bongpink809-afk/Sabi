@@ -14,14 +14,16 @@ function getChainDisplay(sourceChain: CrossChainState['sourceChain']) {
 // D1 — Pending attestation: hiện khi đang chờ Circle ký xác nhận sau khi đã burn xong
 // D2 — Error: hiện 1 trong 4 case, mỗi case có message + hành động phù hợp riêng
 export function CrossChainStatusPanel({
-  state,
-  onRetry,
-  onDismiss,
-}: {
-  state: CrossChainState
-  onRetry: () => void
-  onDismiss: () => void
-}) {
+    state,
+    onRetry,
+    onDismiss,
+    contributorName,
+  }: {
+    state: CrossChainState
+    onRetry: () => void
+    onDismiss: () => void
+    contributorName?: string
+  }) {
   const chainDisplay = getChainDisplay(state.sourceChain)
 
   if (state.status === 'checking_balance' || state.status === 'burning') {
@@ -39,7 +41,7 @@ export function CrossChainStatusPanel({
     return (
       <Panel>
         <p style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
-          ⏳ Đang xử lý...
+          ⏳ Đang xử lý...{contributorName && ` — ${contributorName}`}
         </p>
         <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8 }}>
           Burn tx đã xác nhận trên {chainDisplay.name}.

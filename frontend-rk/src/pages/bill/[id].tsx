@@ -42,9 +42,11 @@ const BillDetail: NextPage = () => {
     : 'unsupported'
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
+  const [billTitle, setBillTitle] = useState<string | null>(null)
   const [payingShareId, setPayingShareId] = useState<number | null>(null)
   // hash đã confirm của từng share — lưu bền để không mất khi F5 lại trang
   const [paidTxHashes, setPaidTxHashes] = useState<Record<number, `0x${string}`>>({})
+  
 
   // ─── Danh sách người đã góp (mode OPEN_SLOT) — đọc từ event log trên chain ──
   const [contributions, setContributions] = useState<Contribution[]>([])
@@ -52,6 +54,7 @@ const BillDetail: NextPage = () => {
   // Tên tự đặt cho từng địa chỉ ví — lưu local theo billId, key là address viết thường
   const [slotNames, setSlotNames] = useState<Record<string, string>>({})
   const [contributorName, setContributorName] = useState('')
+  const [pendingContributorName, setPendingContributorName] = useState('')
 
 
 
@@ -60,7 +63,7 @@ const BillDetail: NextPage = () => {
     setIsLoadingContributions(true)
     try {
       const latestBlock = await publicClient.getBlockNumber()
-      const CHUNK_SIZE = 2000n // RPC Arc Testnet giới hạn số block/lần gọi — quét cả chain 1 lần bị lỗi 413
+      const CHUNK_SIZE = 5000n//PC Arc Testnet giới hạn số block/lần gọi — quét cả chain 1 lần bị lỗi 413
       const MAX_CHUNKS = 50 // giới hạn an toàn — không quét quá 100k block về trước, tránh treo nếu chain đã chạy lâu
       const allLogs: any[] = []
 
@@ -161,6 +164,9 @@ const BillDetail: NextPage = () => {
         // bỏ qua, chỉ hiện địa chỉ ví thay vì tên
       }
     }
+    const rawTitle = localStorage.getItem(`sabi-bill-${billId.toString()}-title`)
+    if (rawTitle) setBillTitle(rawTitle)
+
     fetchContributions()
   }, [billId])
     // Khôi phục share đang xử lý dở sau khi F5 — quét localStorage tìm giao dịch cross-chain chưa xong
@@ -244,17 +250,17 @@ const BillDetail: NextPage = () => {
     hash: paySlotTx,
   })
 
-  // Sau khi tx confirm → refetch lại bill để cập nhật trạng thái paid
   useEffect(() => {
-    if (isShareConfirmed) {
+    if (isSlotConfirmed && paySlotTx) {
       refetchBill()
-      if (billId !== undefined && payingShareId !== null && payShareTx) {
-        const next = { ...paidTxHashes, [payingShareId]: payShareTx }
-        setPaidTxHashes(next)
-        localStorage.setItem(`sabi-bill-${billId.toString()}-tx`, JSON.stringify(next))
+      fetchContributions()
+      if (pendingContributorName && billId !== undefined) {
+        const next = { ...slotNames, [paySlotTx]: pendingContributorName }
+        setSlotNames(next)
+        localStorage.setItem(`sabi-bill-${billId.toString()}-slotnames`, JSON.stringify(next))
       }
     }
-  }, [isShareConfirmed])
+  }, [isSlotConfirmed])
 
   useEffect(() => {
     if (isSlotConfirmed) {
@@ -278,11 +284,7 @@ const BillDetail: NextPage = () => {
 
   const handlePaySlot = () => {
     if (billId === undefined || !bill) return
-    if (connectedAddress && contributorName.trim()) {
-      const next = { ...slotNames, [connectedAddress.toLowerCase()]: contributorName.trim() }
-      setSlotNames(next)
-      localStorage.setItem(`sabi-bill-${billId.toString()}-slotnames`, JSON.stringify(next))
-    }
+    setPendingContributorName(contributorName.trim())
     paySlot({
       address: SABI_BILL_ADDRESS,
       abi: SABI_BILL_ABI,
@@ -315,7 +317,7 @@ const BillDetail: NextPage = () => {
   return (
     <>
       <Head>
-        <title>Bill #{billId.toString()} — Sabi</title>
+        <title>{billTitle ? `${billTitle} — Sabi` : `Bill #${billId.toString()} — Sabi`}</title>
       </Head>
 
       <main
@@ -342,7 +344,7 @@ const BillDetail: NextPage = () => {
           }}
         >
           <h1 style={{ fontSize: 20, fontWeight: 700, color: colors.textPrimary, marginBottom: 4 }}>
-            Bill #{billId.toString()}
+            {billTitle ?? `Bill #${billId.toString()}`}
           </h1>
           <p style={{ color: colors.textSecondary, fontSize: 14, marginBottom: 20 }}>
             {mode === 'ASSIGNED' ? 'Chia theo người' : 'Góp theo slot'}
@@ -372,27 +374,30 @@ const BillDetail: NextPage = () => {
         )}
 
           {mode === 'OPEN_SLOT' && (
-            <OpenSlotInfo
-              amountPerSlot={bill.amountPerSlot}
-              matchedSlotsCount={Number(bill.matchedSlotsCount ?? 0)}
-              numSlots={Number(bill.numSlots ?? 0)}
-              extraReceived={bill.extraReceived}
-              onPay={handlePaySlot}
-              isPaying={isPayingSlot || isConfirmingSlot}
-              hasAllowance={hasEnoughAllowance(bill.amountPerSlot)}
-              onApprove={handleApprove}
-              isApproving={isApprovingNow}
-              isWalletConnected={!!connectedAddress}
-              payTxHash={paySlotTx}
-              paySuccess={isSlotConfirmed}
-              payError={paySlotError}
-              contributions={contributions}
-              isLoadingContributions={isLoadingContributions}
-              slotNames={slotNames}
-              contributorName={contributorName}
-              onChangeContributorName={setContributorName}
-            />
-          )}
+          <OpenSlotInfo
+            billId={billId}
+            amountPerSlot={bill.amountPerSlot}
+            matchedSlotsCount={Number(bill.matchedSlotsCount ?? 0)}
+            numSlots={Number(bill.numSlots ?? 0)}
+            extraReceived={bill.extraReceived}
+            onPayDirect={handlePaySlot}
+            isPaying={isPayingSlot || isConfirmingSlot}
+            hasAllowance={hasEnoughAllowance(bill.amountPerSlot)}
+            onApprove={handleApprove}
+            isApproving={isApprovingNow}
+            isWalletConnected={!!connectedAddress}
+            payTxHash={paySlotTx}
+            paySuccess={isSlotConfirmed}
+            payError={paySlotError}
+            contributions={contributions}
+            isLoadingContributions={isLoadingContributions}
+            slotNames={slotNames}
+            connectedAddress={connectedAddress}
+            contributorName={contributorName}
+            onChangeContributorName={setContributorName}
+            payMethod={payMethod}
+          />
+        )}
         </div>
       </main>
     </>
@@ -709,11 +714,12 @@ function ShareRow({
 }
 
 function OpenSlotInfo({
+  billId,
   amountPerSlot,
   matchedSlotsCount,
   numSlots,
   extraReceived,
-  onPay,
+  onPayDirect,
   isPaying,
   hasAllowance,
   onApprove,
@@ -725,14 +731,17 @@ function OpenSlotInfo({
   contributions,
   isLoadingContributions,
   slotNames,
+  connectedAddress,
   contributorName,
   onChangeContributorName,
+  payMethod,
 }: {
+  billId: bigint
   amountPerSlot: bigint
   matchedSlotsCount: number
   numSlots: number
   extraReceived: bigint
-  onPay: () => void
+  onPayDirect: () => void
   isPaying: boolean
   hasAllowance: boolean
   onApprove: () => void
@@ -744,13 +753,36 @@ function OpenSlotInfo({
   contributions: Contribution[]
   isLoadingContributions: boolean
   slotNames: Record<string, string>
+  connectedAddress: `0x${string}` | undefined
   contributorName: string
   onChangeContributorName: (name: string) => void
+  payMethod: 'arc' | 'base' | 'arbitrum' | 'unsupported'
 }) {
   const amount = formatUnits(amountPerSlot, 6)
   const extra = formatUnits(extraReceived, 6)
 
   const needsApprove = isWalletConnected && !hasAllowance
+
+  // OPEN_SLOT dùng shareId: undefined — đúng thiết kế gốc, không gắn 1 người/1 share cố định
+  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay } = useCrossChainPayment(billId, undefined)
+  const isCrossChainBusy = !['idle', 'success', 'error'].includes(ccState.status)
+
+  const handleClickPay = async () => {
+    if (payMethod === 'unsupported') {
+      alert('Vui lòng đổi ví sang Arc Testnet, Base Sepolia hoặc Arbitrum Sepolia trước khi góp tiền')
+      return
+    }
+    if (payMethod === 'base' || payMethod === 'arbitrum') {
+      await startCrossChainPay(amountPerSlot, payMethod)
+      return
+    }
+    onPayDirect()
+  }
+
+  const handleRetryCrossChain = () => {
+    const source = ccState.sourceChain ?? (payMethod === 'arbitrum' ? 'arbitrum' : 'base')
+    startCrossChainPay(amountPerSlot, source)
+  }
 
   return (
     <div>
@@ -777,7 +809,7 @@ function OpenSlotInfo({
       </div>
 
       {/* Ô nhập tên tùy chọn — chỉ lưu trên máy người này, để mọi người biết ai đã góp */}
-      {!needsApprove && !paySuccess && (
+      {isWalletConnected && !needsApprove && !paySuccess && !isCrossChainBusy && (
         <input
           value={contributorName}
           onChange={(e) => onChangeContributorName(e.target.value)}
@@ -819,60 +851,74 @@ function OpenSlotInfo({
           </p>
         </>
       ) : (
-        <button
-          onClick={onPay}
-          disabled={isPaying || !isWalletConnected}
-          style={{
-            width: '100%',
-            fontSize: 14,
-            fontWeight: 600,
-            color: '#fff',
-            background: isPaying || !isWalletConnected ? colors.textMuted : colors.primary,
-            border: 'none',
-            borderRadius: radius.button,
-            padding: '12px',
-            cursor: isPaying || !isWalletConnected ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {!isWalletConnected ? 'Kết nối ví để góp tiền' : isPaying ? 'Đang xử lý...' : `Góp ${amount} USDC`}
-        </button>
-      )}
-
-      {/* Trạng thái giao dịch — để không ai phải đoán mò như lúc test lần đầu */}
-      {isPaying && !payTxHash && (
-        <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-          Đang chờ ký trong ví...
-        </p>
-      )}
-      {payTxHash && !paySuccess && !payError && (
-        <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-          Đã gửi, đang chờ xác nhận trên chain...
-        </p>
-      )}
-      {paySuccess && (
-        <div style={{ marginTop: 8, textAlign: 'center' }}>
-          <p style={{ color: colors.successText, fontSize: 12, fontWeight: 600 }}>Góp tiền thành công</p>
-          {payTxHash && (
-<a            
-              href={`https://testnet.arcscan.app/tx/${payTxHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
+          isWalletConnected && (
+            <button
+              onClick={handleClickPay}
+              disabled={isPaying || isCrossChainBusy}
               style={{
-                color: colors.primary,
-                fontSize: 11,
-                textDecoration: 'underline',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                width: '100%',
+                fontSize: 14,
+                fontWeight: 600,
+                color: '#fff',
+                background: isPaying || isCrossChainBusy ? colors.textMuted : colors.primary,
+                border: 'none',
+                borderRadius: radius.button,
+                padding: '12px',
+                cursor: isPaying || isCrossChainBusy ? 'not-allowed' : 'pointer',
               }}
             >
-              Xem tx: {payTxHash.slice(0, 10)}...{payTxHash.slice(-8)}
-            </a>
+              {isCrossChainBusy ? 'Đang xử lý...' : isPaying ? 'Đang xử lý...' : `Góp ${amount} USDC`}
+            </button>
+          )
+        )}
+
+      {/* Trạng thái giao dịch — để không ai phải đoán mò như lúc test lần đầu */}
+      {isWalletConnected && (
+        <>
+          {isPaying && !payTxHash && (
+            <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
+              Đang chờ ký trong ví...
+            </p>
           )}
-        </div>
+          {payTxHash && !paySuccess && !payError && (
+            <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
+              Đã gửi, đang chờ xác nhận trên chain...
+            </p>
+          )}
+          {paySuccess && (
+            <div style={{ marginTop: 8, textAlign: 'center' }}>
+              <p style={{ color: colors.successText, fontSize: 12, fontWeight: 600 }}>Góp tiền thành công</p>
+              {payTxHash && (
+<a              
+                  href={`https://testnet.arcscan.app/tx/${payTxHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: colors.primary,
+                    fontSize: 11,
+                    textDecoration: 'underline',
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                  }}
+                >
+                  Xem tx: {payTxHash.slice(0, 10)}...{payTxHash.slice(-8)}
+                </a>
+              )}
+            </div>
+          )}
+          {payError && (
+            <p style={{ color: colors.danger, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
+              Lỗi: {payError.message.split('\n')[0]}
+            </p>
+          )}
+        </>
       )}
-      {payError && (
-        <p style={{ color: colors.danger, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-          Lỗi: {payError.message.split('\n')[0]}
-        </p>
+      {isWalletConnected && ccState.status !== 'idle' && (
+        <CrossChainStatusPanel
+          state={ccState}
+          onRetry={handleRetryCrossChain}
+          onDismiss={resetCrossChainPay}
+          contributorName={contributorName}
+        />
       )}
 
       {/* Danh sách người đã góp — đọc từ event SlotFilled trên chain */}
@@ -891,8 +937,9 @@ function OpenSlotInfo({
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {contributions.map((c, i) => {
-            const displayName = slotNames[c.payer.toLowerCase()]
+            const displayName = slotNames[c.txHash]
             const shortAddress = `${c.payer.slice(0, 6)}...${c.payer.slice(-4)}`
+            const isYou = connectedAddress && c.payer.toLowerCase() === connectedAddress.toLowerCase()
             return (
               <div
                 key={`${c.txHash}-${i}`}
@@ -901,7 +948,8 @@ function OpenSlotInfo({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '8px 12px',
-                  background: colors.backgroundSubtle,
+                  background: isYou ? colors.backgroundSubtle : colors.backgroundSubtle,
+                  border: isYou ? `1.5px solid ${colors.primary}` : '1.5px solid transparent',
                   borderRadius: 6,
                   fontSize: 12,
                 }}
@@ -913,7 +961,7 @@ function OpenSlotInfo({
                       <span style={{ color: colors.warning, fontWeight: 400, marginLeft: 6 }}>(lệch số tiền)</span>
                     )}
                   </div>
-                  <a
+<a                
                     href={`https://testnet.arcscan.app/tx/${c.txHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
