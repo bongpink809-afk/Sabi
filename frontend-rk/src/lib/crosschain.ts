@@ -18,5 +18,13 @@ export const SABI_BILL_MINT_RECIPIENT = pad(SABI_BILL_ADDRESS, { size: 32 })
 export const DESTINATION_CALLER_ANY = pad('0x00', { size: 32 })
 
 // Standard transfer (không phải fast) — PHẢI đi cùng nhau, sai 1 trong 2 sẽ bị tính phí hoặc lỗi
-export const STANDARD_MIN_FINALITY = 2000
-export const STANDARD_MAX_FEE = 0n
+// Fast Transfer: Circle attest khi đạt soft finality (~8-20s)
+// thay vì chờ hard finality (15-30 phút). minFinality <= 500 = Fast.
+export const FAST_MIN_FINALITY = 500
+
+// Trần phí Fast — Circle chỉ trừ phí THỰC theo biểu phí (rất nhỏ),
+// maxFee chỉ là mức trần cho phép. Đặt 1% để không bao giờ bị
+// fallback về Standard. Contract đo balance delta nên mức phí nào cũng xử lý đúng.
+export function fastMaxFee(amount: bigint): bigint {
+  return amount / 100n + 1n // +1n để amount quá nhỏ không ra 0 (maxFee=0 là fallback Standard)
+}

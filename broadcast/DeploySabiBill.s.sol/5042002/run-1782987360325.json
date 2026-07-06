@@ -4,7 +4,7 @@
       "hash": "0x032860cc4f28a4723805133d067563e3b786aa603aecd97cdca19704bf91c7c4",
       "transactionType": "CREATE",
       "contractName": "SabiBill",
-      "contractAddress": "0xfbb7765fc0150c5d41bf85eedeb4a45747884ce5",
+      "contractAddress": "0x192963eBcC9f39C0057597CF3AA7d97c99a83c75",
       "function": null,
       "arguments": [
         "0x3600000000000000000000000000000000000000",
@@ -38,7 +38,7 @@
       "effectiveGasPrice": "0x4c07d0a3b",
       "from": "0x282ac4ddcb3dc160b5c802937ba12f9b0f3d6f92",
       "to": null,
-      "contractAddress": "0xfbb7765fc0150c5d41bf85eedeb4a45747884ce5"
+      "contractAddress": "0x192963eBcC9f39C0057597CF3AA7d97c99a83c75"
     }
   ],
   "libraries": [],

@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAccount, usePublicClient } from 'wagmi'
+import { sepolia } from 'wagmi/chains'
 import { useBurnCrossChain, SourceChain } from './useBurnCrossChain'
 import { usePollAttestation } from './usePollAttestation'
 import { usePayCrossChain } from './usePayCrossChain'
@@ -10,6 +11,8 @@ import {
   ARBITRUM_SEPOLIA_USDC_ADDRESS,
   BASE_SEPOLIA_DOMAIN,
   ARBITRUM_SEPOLIA_DOMAIN,
+  ETHEREUM_SEPOLIA_USDC_ADDRESS,
+  ETHEREUM_SEPOLIA_DOMAIN,
   ERC20_ABI,
 } from '../lib/contracts'
 
@@ -32,16 +35,19 @@ export interface CrossChainState {
   status: CrossChainStatus
   billId: string
   shareId?: number
-  sourceChain?: 'base' | 'arbitrum'
+  sourceChain?: SourceChain
   burnTxHash?: `0x${string}`
   relayTxHash?: `0x${string}`
   errorType?: CrossChainErrorType
   errorMessage?: string
 }
 
+// name + domain gộp cùng bảng balance-check — tránh lặp lại ternary base/arbitrum
+// rải rác nhiều chỗ (dễ quên nhánh khi thêm chain thứ 3 như đã xảy ra với 'ethereum')
 const BALANCE_CHECK_CONFIG = {
-  base: { chainId: baseSepolia.id, usdcAddress: BASE_SEPOLIA_USDC_ADDRESS },
-  arbitrum: { chainId: arbitrumSepolia.id, usdcAddress: ARBITRUM_SEPOLIA_USDC_ADDRESS },
+  base: { chainId: baseSepolia.id, usdcAddress: BASE_SEPOLIA_USDC_ADDRESS, domain: BASE_SEPOLIA_DOMAIN, name: 'Base Sepolia' },
+  arbitrum: { chainId: arbitrumSepolia.id, usdcAddress: ARBITRUM_SEPOLIA_USDC_ADDRESS, domain: ARBITRUM_SEPOLIA_DOMAIN, name: 'Arbitrum Sepolia' },
+  ethereum: { chainId: sepolia.id, usdcAddress: ETHEREUM_SEPOLIA_USDC_ADDRESS, domain: ETHEREUM_SEPOLIA_DOMAIN, name: 'Ethereum Sepolia' },
 } as const
 
 // OPEN_SLOT (shareId undefined) — ai cũng trả được, phải phân biệt theo địa chỉ ví,
@@ -97,6 +103,8 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
   const { address } = useAccount()
   const publicClientBase = usePublicClient({ chainId: baseSepolia.id })
   const publicClientArbitrum = usePublicClient({ chainId: arbitrumSepolia.id })
+  const publicClientEthereum = usePublicClient({ chainId: sepolia.id })
+  const publicClients = { base: publicClientBase, arbitrum: publicClientArbitrum, ethereum: publicClientEthereum }
   const { burn } = useBurnCrossChain()
   const { poll } = usePollAttestation()
   const { relay } = usePayCrossChain()
@@ -118,9 +126,16 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     [address]
   )
 
+  // Chặn xử lý trùng cho cùng 1 burn tx — effect resume có thể chạy 2 lần
+  // (StrictMode, hoặc deps address đổi giữa chừng). 2 lệnh payCrossChain song song
+  // từ cùng 1 ví sẽ đụng nonce → tx sau replace tx trước → hash hiển thị thành hash chết.
+  const inFlightBurnTxRef = useRef<`0x${string}` | null>(null)
+
   const continueFromAttestation = async (burnTxHash: `0x${string}`, sourceChain: SourceChain) => {
+    if (inFlightBurnTxRef.current === burnTxHash) return
+    inFlightBurnTxRef.current = burnTxHash
     try {
-      const domain = sourceChain === 'base' ? BASE_SEPOLIA_DOMAIN : ARBITRUM_SEPOLIA_DOMAIN
+      const domain = BALANCE_CHECK_CONFIG[sourceChain].domain
       const { message, attestation } = await poll(burnTxHash, domain)
       updateState({ status: 'relaying' })
       const relayTxHash = await relay(message, attestation)
@@ -134,6 +149,8 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
         return
       }
       updateState({ status: 'error', errorType: type, errorMessage: message })
+    } finally {
+      inFlightBurnTxRef.current = null
     }
   }
 
@@ -153,7 +170,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     updateState({ status: 'checking_balance', sourceChain })
     try {
       const config = BALANCE_CHECK_CONFIG[sourceChain]
-      const publicClient = sourceChain === 'base' ? publicClientBase : publicClientArbitrum
+      const publicClient = publicClients[sourceChain]
 
       if (address && publicClient) {
         const balance = (await publicClient.readContract({
@@ -166,7 +183,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
           updateState({
             status: 'error',
             errorType: 'insufficient_balance',
-            errorMessage: `Số dư USDC trên ${sourceChain === 'base' ? 'Base Sepolia' : 'Arbitrum Sepolia'} không đủ`,
+            errorMessage: `Số dư USDC trên ${BALANCE_CHECK_CONFIG[sourceChain].name} không đủ`,
           })
           return
         }

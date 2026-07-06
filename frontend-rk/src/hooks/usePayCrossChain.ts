@@ -16,7 +16,9 @@ export function usePayCrossChain() {
     setIsRelaying(true)
     try {
       // Sau bước burn, ví đang ở Base Sepolia — bắt buộc chuyển sang Arc trước khi gọi payCrossChain
-      if (currentChainId !== arcTestnet.id) {
+      // (writeContractAsync với chainId khác chain hiện tại sẽ throw ChainMismatchError, không tự switch)
+      const chainBefore = currentChainId
+      if (chainBefore !== arcTestnet.id) {
         await switchChainAsync({ chainId: arcTestnet.id })
       }
 
@@ -30,10 +32,24 @@ export function usePayCrossChain() {
         const receipt = await publicClient!.waitForTransactionReceipt({ hash: tx })
 
         if (receipt.status === 'reverted') {
-        throw new Error(`payCrossChain reverted: ${tx}`)
+        throw new Error(`payCrossChain reverted: ${receipt.transactionHash}`)
         }
 
-        return tx
+        // Trả ví về chain user đang đứng trước khi relay — chỉ mượn Arc để ký payCrossChain,
+        // không được để ví "kẹt" lại Arc khi user không chủ động switch.
+        // Best-effort: switch về thất bại không được ảnh hưởng kết quả thanh toán đã xong.
+        if (chainBefore !== undefined && chainBefore !== arcTestnet.id) {
+          try {
+            await switchChainAsync({ chainId: chainBefore })
+          } catch {
+            // bỏ qua — user tự đổi tay được, tiền đã ghi nhận xong trên Arc
+          }
+        }
+
+        // PHẢI trả hash từ receipt, KHÔNG trả `tx`: nếu tx bị replace (speed-up,
+        // hoặc 2 tx cùng nonce đè nhau), viem vẫn resolve với receipt của tx THAY THẾ —
+        // lúc đó `tx` gốc không tồn tại trên chain, hiển thị ra sẽ là hash chết
+        return receipt.transactionHash
     } finally {
       setIsRelaying(false)
     }

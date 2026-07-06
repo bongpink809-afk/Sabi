@@ -190,9 +190,18 @@ contract SabiBill {
         bytes calldata message,
         bytes calldata attestation
         ) external {
+        // 0. Ghi balance TRƯỚC khi mint — để đo chính xác số USDC thực nhận
+        uint256 balanceBefore = usdc.balanceOf(address(this));
+
         // 1. Gọi receiveMessage — mint USDC vào địa chỉ này (mintRecipient = address(this))
         bool ok = messageTransmitter.receiveMessage(message, attestation);
         if (!ok) revert ReceiveMessageFailed();
+
+        // 1b. Số thực nhận = chênh lệch balance. Fast Transfer bị Circle trừ fee
+        // thẳng vào số USDC mint, nên KHÔNG được forward `amount` đọc từ message
+        // — sẽ revert vì thiếu tiền. Đo delta thì chịu được mọi mức fee,
+        // và vẫn đúng với Standard Transfer (fee = 0, received == amount).
+        uint256 received = usdc.balanceOf(address(this)) - balanceBefore;
 
         // 2. Extract messageBody từ full message (skip 148-byte MessageV2 header)
         bytes calldata messageBody = message[148:];
@@ -203,6 +212,7 @@ contract SabiBill {
         bytes calldata hookData = messageBody[228:];
 
         // 4. Decode billId từ hookData (luôn có ở cả 2 mode)
+
         if (hookData.length < 32) revert InvalidHookData();
         uint256 billId = abi.decode(hookData[:32], (uint256));
 
@@ -215,12 +225,14 @@ contract SabiBill {
 
             Share storage share = _getShare(billId, shareId);
             if (share.paid) revert AlreadyPaid(billId, shareId);
+            // So bằng `amount` (số đã burn) chứ KHÔNG phải `received` —
+            // received luôn thiếu fee nên so received sẽ không bao giờ khớp
             if (amount != share.amount) revert WrongAmount(billId, shareId, amount, share.amount);
 
             share.paid = true;
 
-            // forward USDC đến organizer ngay trong cùng tx
-            require(usdc.transfer(b.organizer, amount), "transfer failed");
+            // forward số THỰC NHẬN đến organizer ngay trong cùng tx
+            require(usdc.transfer(b.organizer, received), "transfer failed");
             emit SharePaid(billId, shareId, address(uint160(uint256(messageSender))), amount);
 
         } else {
@@ -232,10 +244,10 @@ contract SabiBill {
                 b.extraReceived += amount;
             }
 
-            require(usdc.transfer(b.organizer, amount), "transfer failed");
+            require(usdc.transfer(b.organizer, received), "transfer failed");
             emit SlotFilled(billId, address(uint160(uint256(messageSender))), amount, matched);
         }
-    }   
+    }
 
     // ─── View ─────────────────────────────────────────────────────────────────
 

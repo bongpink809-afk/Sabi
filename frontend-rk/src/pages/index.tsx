@@ -1,116 +1,425 @@
-import { ConnectButton } from '@rainbow-me/rainbowkit';
-import type { NextPage } from 'next';
-import Head from 'next/head';
-import { useRouter } from 'next/router';
-import { colors } from '../styles/theme';
+import { arcTestnet } from '../wagmi'
+import type { NextPage } from 'next'
+import Head from 'next/head'
+import { useRouter } from 'next/router'
+import { useState, useEffect } from 'react'
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { parseUnits, parseEventLogs } from 'viem'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
+import { colors } from '../styles/theme'
+import { ModeCard } from '../components/ModeCard'
+import { MobileCta } from '../components/MobileCta'
+import { SabiHeader } from '../components/SabiHeader'
+import { SabiLogo } from '../components/SabiLogo'
 
+type BillMode = 'ASSIGNED' | 'OPEN_SLOT'
+
+// Tự động viết hoa chữ cái đầu tiên khi gõ tên bill / tên người
+const capitalizeFirst = (s: string) => (s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1))
+
+interface ShareRow {
+  name: string
+  amount: string
+}
+
+// Trang tạo bill — 1 màn hình duy nhất: mode-card + form + nút tạo, không có
+// bước "xem trước" riêng nữa. Tạo xong điều hướng sang Hồ sơ để thấy bill
+// vừa tạo xuất hiện ngay trong danh sách "Bill đã tạo".
 const Home: NextPage = () => {
-  const router = useRouter();
+  const router = useRouter()
+  const { isConnected } = useAccount()
+  const [mode, setMode] = useState<BillMode>('ASSIGNED')
+  const [billName, setBillName] = useState('')
+  const { chainId: currentChainId } = useAccount()
+  const isWrongNetwork = currentChainId !== undefined && currentChainId !== arcTestnet.id
+
+  const [shares, setShares] = useState<ShareRow[]>([
+    { name: '', amount: '' },
+    { name: '', amount: '' },
+    { name: '', amount: '' },
+    { name: '', amount: '' },
+  ])
+  const [totalOpenInput, setTotalOpenInput] = useState('')
+  const [numSlots, setNumSlots] = useState('')
+  const numSlotsInt = parseInt(numSlots) || 0
+  const totalOpenValue = parseFloat(totalOpenInput) || 0
+  // Mỗi người góp = tổng ÷ N, tính ra chứ không cho nhập trực tiếp — khớp
+  // sabi-ui-prototype-v8.html (osTotal/osSlots → osPer tự tính)
+  const amountPerSlotComputed = numSlotsInt > 0 ? totalOpenValue / numSlotsInt : 0
+
+  const { writeContract, data: txHash, isPending } = useWriteContract()
+  const { data: receipt, isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+
+  // Sau khi tx confirm, đọc billId thật từ event BillCreated trong log
+  // (billId không có sẵn trong response tx — phải giải mã log mới lấy được)
+  useEffect(() => {
+    if (!isSuccess || !receipt) return
+    try {
+      const logs = parseEventLogs({
+        abi: SABI_BILL_ABI,
+        logs: receipt.logs,
+        eventName: 'BillCreated',
+      })
+      if (logs.length > 0) {
+        const newBillId = logs[0].args.billId as bigint
+
+        // Lưu tên các share vào localStorage — contract không lưu tên,
+        // trang /bill/[id] cần đọc lại từ đây để hiện đúng tên thay vì "Phần #n"
+        if (mode === 'ASSIGNED') {
+          const namesMap: Record<number, string> = {}
+          shares
+            .filter((s) => s.amount)
+            .forEach((s, i) => {
+              if (s.name.trim()) namesMap[i] = s.name.trim()
+            })
+          if (Object.keys(namesMap).length > 0) {
+            localStorage.setItem(`sabi-bill-${newBillId.toString()}-names`, JSON.stringify(namesMap))
+          }
+        }
+
+        // Lưu tên bill — contract không có field này, chỉ lưu frontend
+        if (billName.trim()) {
+          localStorage.setItem(`sabi-bill-${newBillId.toString()}-title`, billName.trim())
+        }
+
+        // Sang Hồ sơ — bill vừa tạo hiện ngay trong "Bill đã tạo"
+        router.push('/profile')
+      } else {
+        console.error('Không tìm thấy event BillCreated trong log')
+      }
+    } catch (err) {
+      console.error('Lỗi đọc billId từ log:', err)
+    }
+  }, [isSuccess, receipt])
+
+  const totalAssigned = shares.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
+  const totalOpen = totalOpenValue
+
+  const addShare = () => setShares([...shares, { name: '', amount: '' }])
+  const updateShare = (i: number, field: keyof ShareRow, val: string) => {
+    const next = [...shares]
+    next[i][field] = val
+    setShares(next)
+  }
+  const removeShare = (i: number) => setShares(shares.filter((_, idx) => idx !== i))
+
+  const handleCreate = async () => {
+    if (!isConnected) return
+    try {
+      if (mode === 'ASSIGNED') {
+        const amounts = shares
+          .filter(s => s.amount)
+          .map(s => parseUnits(s.amount, 6))
+
+        writeContract({
+          address: SABI_BILL_ADDRESS,
+          abi: SABI_BILL_ABI,
+          functionName: 'createAssignedBill',
+          args: [amounts],
+          chainId: arcTestnet.id,
+        })
+      } else {
+        writeContract({
+          address: SABI_BILL_ADDRESS,
+          abi: SABI_BILL_ABI,
+          functionName: 'createOpenSlotBill',
+          args: [
+            parseUnits(amountPerSlotComputed.toFixed(6), 6),
+            BigInt(numSlotsInt),
+          ],
+          chainId: arcTestnet.id,
+        })
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const formIncomplete = mode === 'ASSIGNED' ? shares.every(s => !s.amount) : !totalOpenInput || !numSlots
 
   return (
-    <div style={{ minHeight: '100vh', fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column' }}>
-      <Head>
-        <title>Sabi</title>
-      </Head>
-
-      <nav style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '12px 80px',
-        borderBottom: `1px solid ${colors.borderLight}`,
-      }}>
-        <strong style={{ fontSize: 20, color: colors.primary }}>Sabi</strong>
-        <ConnectButton />
-      </nav>
-
-      <main style={{
-        flex: 1,
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        alignItems: 'center',
-        padding: '0 80px',
-        width: '100%',
-        boxSizing: 'border-box',
-        minHeight: 'calc(100vh - 57px)',
-      }}>
-
-        <div style={{ paddingRight: 60 }}>
-          <h1 style={{ fontSize: 52, fontWeight: 800, lineHeight: 1.15, marginBottom: 20, color: colors.textPrimary }}>
-            Share Bill Dapp
-          </h1>
-          <p style={{ fontSize: 18, color: colors.textSecondary, marginBottom: 40, lineHeight: 1.6 }}>
-            Pay with USDC from any chain.
-          </p>
-
-          <button
-            onClick={() => router.push('/create')}
-            style={{
-              background: colors.primary,
-              color: colors.surface,
-              border: 'none',
-              padding: '16px 40px',
-              fontSize: 17,
-              fontWeight: 600,
-              borderRadius: 10,
-              cursor: 'pointer',
-              marginBottom: 56,
-            }}
-          >
-            Create bill →
-          </button>
-
-          <p style={{ fontSize: 11, fontWeight: 600, color: colors.textMuted, letterSpacing: 2, marginBottom: 16 }}>
-            HOW IT WORKS
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            {[
-              { step: '1', text: 'Create Bill' },
-              { step: '2', text: 'Share link' },
-              { step: '3', text: 'Select chain' },
-              { step: '4', text: 'Send USDC' },
-            ].map(item => (
-              <div key={item.step} style={{
-                border: `1px solid ${colors.border}`,
-                borderRadius: 12,
-                padding: '14px 20px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 14,
-              }}>
-                <span style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  background: colors.badgeBg,
-                  color: colors.badgeText,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 14,
-                  fontWeight: 700,
-                  flexShrink: 0,
-                }}>{item.step}</span>
-                <span style={{ fontSize: 15, color: colors.bodyText }}>{item.text}</span>
-              </div>
-            ))}
+    <div style={wrap}>
+      <Head><title>Tạo bill — Sabi</title></Head>
+      <SabiHeader />
+      <div
+        style={{
+          maxWidth: 1080,
+          margin: '32px auto',
+          padding: '0 16px',
+          display: 'grid',
+          gridTemplateColumns: '1fr 400px',
+          gap: 30,
+          alignItems: 'start',
+        }}
+      >
+        <div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+            <ModeCard
+              mode="assigned"
+              tag="ASSIGNED"
+              title="Chia theo danh sách"
+              description="Đặt tên và số tiền cho từng phần. Ai cũng trả được phần bất kỳ, trạng thái tick theo từng tên."
+              selected={mode === 'ASSIGNED'}
+              onClick={() => setMode('ASSIGNED')}
+            />
+            <ModeCard
+              mode="openslot"
+              tag="OPEN-SLOT"
+              title="Chia đều"
+              description="Tổng tiền chia đều cho số người"
+              selected={mode === 'OPEN_SLOT'}
+              onClick={() => setMode('OPEN_SLOT')}
+            />
           </div>
 
-          <p style={{ fontSize: 12, color: colors.textMuted, marginTop: 28 }}>
-            Built on Arc · USDC · CCTP V2
+          <label style={lbl}>Tên bill</label>
+          <input style={input} placeholder="Lẩu tối thứ 6" value={billName} onChange={e => setBillName(capitalizeFirst(e.target.value))} />
+
+          {mode === 'ASSIGNED' ? (
+            <>
+              <label style={lbl}>Người tham gia & số tiền</label>
+              {shares.map((s, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                  <input style={{ ...input, flex: 1, marginBottom: 0 }} placeholder="Tên" value={s.name} onChange={e => updateShare(i, 'name', capitalizeFirst(e.target.value))} />
+                  <input style={{ ...amountInput, flex: 1, marginBottom: 0 }} placeholder="0.00" type="number" min="0" value={s.amount} onChange={e => updateShare(i, 'amount', e.target.value)} />
+                  {shares.length > 1 && <button onClick={() => removeShare(i)} style={rmBtn}>✕</button>}
+                </div>
+              ))}
+              <button onClick={addShare} style={addRowBtn}>+ Thêm người</button>
+              <TotalLine label="Tổng bill (tự cộng)" value={`${totalAssigned.toFixed(2)} USDC`} />
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={lbl}>Tổng tiền (USDC)</label>
+                  <input style={amountInput} placeholder="VD: 40" type="number" min="0" value={totalOpenInput} onChange={e => setTotalOpenInput(e.target.value)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={lbl}>Số người</label>
+                  <input style={amountInput} placeholder="VD: 4" type="number" min="1" value={numSlots} onChange={e => setNumSlots(e.target.value)} />
+                </div>
+              </div>
+              {numSlotsInt > 0 && <TotalLine label="Mỗi người góp (tổng ÷ N)" value={`${amountPerSlotComputed.toFixed(2)} USDC`} />}
+            </>
+          )}
+
+          <button
+            onClick={handleCreate}
+            style={{ ...primaryBtn, marginTop: 16, width: '100%' }}
+            disabled={!isConnected || isPending || isConfirming || isWrongNetwork || formIncomplete}
+          >
+            {!isConnected
+              ? 'Kết nối ví để tạo bill'
+              : isWrongNetwork
+              ? 'Đổi sang Arc Testnet để tạo bill'
+              : isPending
+              ? 'Đang xác nhận trong ví...'
+              : isConfirming
+              ? 'Đang tạo bill...'
+              : isSuccess
+              ? 'Đang chuyển trang...'
+              : 'Tạo bill'}
+          </button>
+          <p style={{ fontSize: 12, color: colors.textPrimary, fontFamily: 'sans-serif', marginTop: 10, textAlign: 'center' }}>
+            <span style={{ color: colors.primary }}>⚠</span> Không thể chỉnh sửa sau khi tạo.
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <img
-            src="/hero.svg"
-            alt="Sabi bill splitting"
-            style={{ width: '100%' }}
-          />
-        </div>
-      </main>
-    </div>
-  );
-};
+        <ReceiptPreview
+          billName={billName}
+          mode={mode}
+          shares={shares}
+          amountPerSlot={amountPerSlotComputed}
+          numSlots={numSlots}
+          total={mode === 'ASSIGNED' ? totalAssigned : totalOpen}
+        />
+      </div>
 
-export default Home;
+      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '0 16px 40px' }}>
+        <MobileCta />
+      </div>
+    </div>
+  )
+}
+
+// Xem trước bill dạng "hoá đơn" — bên phải trang tạo bill, khớp bố cục sabi-ui-prototype-v8.html
+// (màu paper-ink/paper-mut riêng cho receipt + viền răng cưa trên dưới kiểu giấy in hoá đơn).
+// Bill CHƯA tồn tại on-chain lúc này nên chưa có billId/URL thật — QR chỉ là placeholder,
+// không tạo QR giả trỏ tới URL không có thật. QR/link thật chỉ xuất hiện ở trang /bill/[id]
+// sau khi tạo xong.
+function ReceiptPreview({
+  billName,
+  mode,
+  shares,
+  amountPerSlot,
+  numSlots,
+  total,
+}: {
+  billName: string
+  mode: BillMode
+  shares: ShareRow[]
+  amountPerSlot: number
+  numSlots: string
+  total: number
+}) {
+  const rows =
+    mode === 'ASSIGNED'
+      ? shares.map((s) => ({ name: s.name.trim() || '—', amount: parseFloat(s.amount) || 0 }))
+      : [{ name: `Mỗi slot (0/${numSlots || '—'})`, amount: amountPerSlot }]
+
+  return (
+    <div className="receipt">
+      <div style={{ textAlign: 'center', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
+          <SabiLogo size={38} />
+        </div>
+        <div style={{ fontFamily: 'sans-serif', fontWeight: 800, fontSize: 19, color: colors.paperInk }}>SABI</div>
+        <div style={{ fontSize: 10, color: colors.paperMuted, marginTop: 3, letterSpacing: 1 }}>SPLIT BILL · ARC TESTNET</div>
+      </div>
+
+      <ReceiptDash />
+      <ReceiptRow k="BILL" v={billName || '—'} />
+      <ReceiptRow k="MODE" v={mode === 'ASSIGNED' ? 'ASSIGNED' : 'OPEN-SLOT'} />
+      <ReceiptDash />
+
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '7px 0', gap: 10 }}>
+          <span style={{ flex: 1, fontWeight: 500, color: colors.paperInk, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</span>
+          <span style={{ fontWeight: 700, color: colors.paperInk }}>{r.amount.toFixed(2)}</span>
+        </div>
+      ))}
+
+      <ReceiptDash />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0 2px' }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 1, color: colors.paperInk }}>TỔNG</span>
+        <span style={{ fontSize: 22, fontWeight: 700, color: colors.paperInk }}>
+          {total.toFixed(2)} <small style={{ fontSize: 11, color: colors.paperMuted, fontWeight: 500 }}>USDC</small>
+        </span>
+      </div>
+      <ReceiptDash />
+
+      <div
+        style={{
+          width: 150,
+          height: 150,
+          margin: '12px auto 6px',
+          display: 'grid',
+          placeItems: 'center',
+          border: `1.5px dashed ${colors.borderLight}`,
+          borderRadius: 8,
+          color: colors.paperMuted,
+          fontSize: 10,
+          textAlign: 'center',
+          padding: 8,
+        }}
+      >
+        QR thật sẽ hiện ở đây sau khi tạo bill
+      </div>
+      <div style={{ textAlign: 'center', fontSize: 9, color: colors.paperMuted, letterSpacing: 1, marginTop: 7 }}>
+        QUÉT ĐỂ MỞ TRANG TRẢ TIỀN
+      </div>
+
+      <style jsx>{`
+        .receipt {
+          background: ${colors.surface};
+          border-radius: 4px;
+          padding: 24px 22px 18px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          box-shadow: 0 20px 40px ${colors.shadowColor};
+          position: relative;
+        }
+        /* Viền răng cưa trên/dưới kiểu giấy in hoá đơn — copy đúng kỹ thuật
+           repeating radial-gradient từ sabi-ui-prototype-v8.html (.receipt::before/::after) */
+        .receipt::before,
+        .receipt::after {
+          content: '';
+          position: absolute;
+          left: 0;
+          right: 0;
+          height: 10px;
+          background-size: 16px 10px;
+          background-repeat: repeat-x;
+        }
+        .receipt::before {
+          top: -9px;
+          background-image: radial-gradient(circle at 8px 10px, transparent 6px, ${colors.surface} 6.5px);
+        }
+        .receipt::after {
+          bottom: -9px;
+          background-image: radial-gradient(circle at 8px 0px, transparent 6px, ${colors.surface} 6.5px);
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// Dòng "Tổng bill" — label mờ bên trái, giá trị monospace lớn đậm bên phải,
+// khớp .total-line trong sabi-ui-prototype-v8.html
+function TotalLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'baseline',
+        padding: '12px 4px',
+        fontSize: 14,
+        color: colors.textSecondary,
+      }}
+    >
+      <span>{label}</span>
+      <b style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 20, color: colors.textPrimary }}>
+        {value}
+      </b>
+    </div>
+  )
+}
+
+function ReceiptDash() {
+  return <hr style={{ border: 'none', borderTop: `1.5px dashed ${colors.borderLight}`, margin: '9px 0' }} />
+}
+
+function ReceiptRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '4px 0', gap: 12 }}>
+      <span style={{ color: colors.paperMuted }}>{k}</span>
+      <span style={{ fontWeight: 600, color: colors.paperInk, textAlign: 'right', wordBreak: 'break-all' }}>{v}</span>
+    </div>
+  )
+}
+
+const wrap: React.CSSProperties = { minHeight: '100vh', fontFamily: 'sans-serif', background: colors.background }
+const input: React.CSSProperties = {
+  width: '100%',
+  background: colors.surface,
+  color: colors.textPrimary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 8,
+  padding: '10px 14px',
+  fontSize: 14,
+  marginBottom: 12,
+  boxSizing: 'border-box',
+  outline: 'none',
+}
+const amountInput: React.CSSProperties = {
+  ...input,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  textAlign: 'right',
+}
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: colors.label, display: 'block', marginBottom: 6 }
+const primaryBtn: React.CSSProperties = { background: colors.buttonPrimary, color: 'white', border: 'none', borderRadius: 10, padding: '13px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
+const addRowBtn: React.CSSProperties = {
+  width: '100%',
+  padding: 11,
+  border: `1.5px dashed ${colors.border}`,
+  borderRadius: 12,
+  background: 'none',
+  color: colors.textSecondary,
+  fontWeight: 600,
+  fontSize: 13.5,
+  cursor: 'pointer',
+}
+const rmBtn: React.CSSProperties = { background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, width: 32, height: 38, cursor: 'pointer', color: colors.textMuted, flexShrink: 0 }
+
+export default Home

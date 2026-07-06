@@ -5,6 +5,7 @@ import { colors, radius } from '../styles/theme'
 const SOURCE_CHAIN_DISPLAY = {
   base: { name: 'Base Sepolia', explorerBase: 'https://sepolia.basescan.org/tx/' },
   arbitrum: { name: 'Arbitrum Sepolia', explorerBase: 'https://sepolia.arbiscan.io/tx/' },
+  ethereum: { name: 'Ethereum Sepolia', explorerBase: 'https://sepolia.etherscan.io/tx/' },
 } as const
 
 function getChainDisplay(sourceChain: CrossChainState['sourceChain']) {
@@ -64,18 +65,65 @@ export function CrossChainStatusPanel({
             Xem tx burn: {state.burnTxHash.slice(0, 10)}...{state.burnTxHash.slice(-8)}
           </a>
         )}
-        <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
-          {state.status === 'relaying'
-            ? 'Đã có xác nhận từ Circle, đang hoàn tất trên Arc...'
-            : 'Đang chờ Circle ký attestation (khoảng 15–30 phút).'}
-        </p>
+        {/* relaying = ví đang bật popup: switch mạng sang Arc + ký payCrossChain.
+            Phải nói rõ user cần KÝ, không thì tưởng hệ thống tự chạy rồi bỏ lỡ popup. */}
+        {state.status === 'relaying' ? (
+          <>
+            <p style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              ✍️ Mở ví và ký giao dịch để nhận tiền trên Arc
+            </p>
+            <p style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 4 }}>
+              Circle đã xác nhận xong. Đây là bước cuối: ví sẽ hỏi chuyển mạng sang Arc Testnet,
+              rồi ký 1 giao dịch để ghi nhận tiền vào bill — không ký thì tiền chưa tới nơi.
+            </p>
+          </>
+        ) : (
+          <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
+            Đang chờ Circle ký attestation ("thường 8–20 giây").
+          </p>
+        )}
         <p style={{ color: colors.textMuted, fontSize: 12 }}>
           Tiền không mất — có thể đóng tab và quay lại sau, hệ thống sẽ tự tiếp tục.
         </p>
       </Panel>
     )
   }
-
+  // ─── Success: lấp gap giữa "relay xong" và "danh sách hiện dòng mới" ──────
+  // Nếu không có panel này, relay xong panel biến mất ngay nhưng danh sách
+  // "Người đã góp" còn phải quét event vài giây → user thấy màn trống,
+  // không biết tiền đang ở đâu. Panel này giữ user luôn thấy trạng thái.
+  if (state.status === 'success') {
+    return (
+      <Panel>
+        <p style={{ color: colors.success, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+          ✅ USDC đã tới Arc{contributorName && ` — ${contributorName}`}
+        </p>
+        {state.relayTxHash && (
+<a          
+            href={`https://testnet.arcscan.app/tx/${state.relayTxHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'block',
+              marginBottom: 8,
+              color: colors.primary,
+              fontSize: 12,
+              textDecoration: 'underline',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            }}
+          >
+            Xem tx trên Arc: {state.relayTxHash.slice(0, 10)}...{state.relayTxHash.slice(-8)}
+          </a>
+        )}
+        <p style={{ color: colors.textSecondary, fontSize: 13 }}>
+          Đang cập nhật danh sách người góp...
+        </p>
+      </Panel>
+    )
+  }
+  // ─── Success: lấp gap giữa "relay xong" và "danh sách hiện dòng mới" ──────
+  // Không có panel này thì relay xong panel biến mất ngay, nhưng danh sách
+  
   // ─── D2 — Error, 4 case ──────────────────────────────────────────────────
   if (state.status === 'error') {
     const { title, description, showRetry } = getErrorContent(state, chainDisplay.name)
@@ -83,8 +131,7 @@ export function CrossChainStatusPanel({
       <Panel isError>
         <p style={{ color: colors.danger, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{title}</p>
         <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 12 }}>{description}</p>
-        {state.errorType === 'relay_failed' && state.burnTxHash && (
-          
+        {state.errorType === 'relay_failed' && state.burnTxHash && (       
 <a
             href={`${chainDisplay.explorerBase}${state.burnTxHash}`}
             target="_blank"
@@ -103,7 +150,7 @@ export function CrossChainStatusPanel({
         )}
         <div style={{ display: 'flex', gap: 8 }}>
           {showRetry && (
-            <button onClick={onRetry} style={buttonStyle(colors.primary)}>
+            <button onClick={onRetry} style={buttonStyle(colors.buttonPrimary)}>
               Thử lại
             </button>
           )}

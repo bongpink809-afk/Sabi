@@ -1,5 +1,5 @@
+import { baseSepolia, arbitrumSepolia, sepolia } from 'wagmi/chains'
 import { getDefaultConfig } from '@rainbow-me/rainbowkit'
-import { mainnet, base, baseSepolia, arbitrumSepolia, arbitrum, optimism } from 'wagmi/chains'
 import { defineChain } from 'viem'
 import { http } from 'viem'
 
@@ -19,15 +19,12 @@ export const arcTestnet = defineChain({
 export const config = getDefaultConfig({
   appName: 'Sabi',
   projectId: '0599aca09205f1c97acf0fb11b2cc645',
-  chains: [arcTestnet, baseSepolia, arbitrumSepolia, base, mainnet, arbitrum, optimism],
+  chains: [arcTestnet, baseSepolia, arbitrumSepolia, sepolia],
   transports: {
     [arcTestnet.id]: http(),
     [baseSepolia.id]: http('https://base-sepolia.g.alchemy.com/v2/ZTszNH9ETuYNUXzah7wfX'),
     [arbitrumSepolia.id]: http('https://arb-sepolia.g.alchemy.com/v2/gDAnPNo16g_MPXWCSBYGQ'),
-    [base.id]: http(),
-    [mainnet.id]: http(),
-    [arbitrum.id]: http(),
-    [optimism.id]: http(),
+    [sepolia.id]: http('https://eth-sepolia.g.alchemy.com/v2/ZTszNH9ETuYNUXzah7wfX'),
   },
   ssr: true,
 })

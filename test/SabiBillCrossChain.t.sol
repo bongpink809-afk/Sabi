@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {SabiBill, BillMode, Bill, Share, InvalidHookData, ReceiveMessageFailed, AlreadyPaid, WrongAmount, SharePaid, SlotFilled} from "../src/Bill.sol";
 
-/// @notice Mock USDC — mint trực tiếp vào SabiBill (giả lập receiveMessage đã mint)
+/// @notice Mock USDC — transmitter sẽ mint vào SabiBill ngay trong receiveMessage
 contract MockUSDC {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -35,10 +35,14 @@ contract MockUSDC {
     }
 }
 
-/// @notice Mock MessageTransmitterV2 — giả lập mint USDC vào SabiBill khi receiveMessage được gọi
+/// @notice Mock MessageTransmitterV2 — hành xử như transmitter thật:
+/// tự decode amount từ message rồi MINT NGAY trong receiveMessage.
+/// fee > 0 mô phỏng Fast Transfer (Circle trừ fee vào số mint),
+/// fee = 0 mô phỏng Standard Transfer.
 contract MockMessageTransmitter {
     MockUSDC public usdc;
     bool public shouldFail;
+    uint256 public fee; // mặc định 0 = Standard Transfer
 
     constructor(address usdc_) {
         usdc = MockUSDC(usdc_);
@@ -48,13 +52,23 @@ contract MockMessageTransmitter {
         shouldFail = fail;
     }
 
+    function setFee(uint256 fee_) external {
+        fee = fee_;
+    }
+
     function receiveMessage(
-        bytes calldata, /* message */
-        bytes calldata  /* attestation */
+        bytes calldata message,
+        bytes calldata /* attestation */
     ) external returns (bool) {
         if (shouldFail) return false;
-        // Giả lập: mint USDC vào msg.sender (= SabiBill contract)
-        // amount = 1 USDC mặc định — test sẽ build message với amount tương ứng
+
+        // Decode amount từ message giống transmitter thật:
+        // 148 bytes MessageV2 header + offset 68 trong body = 216
+        uint256 amount = uint256(bytes32(message[216:248]));
+
+        // Mint (amount - fee) vào msg.sender (= SabiBill) — đúng hành vi CCTP:
+        // Fast Transfer bị trừ fee thẳng vào số USDC mint ở chain đích
+        usdc.mint(msg.sender, amount - fee);
         return true;
     }
 }
@@ -68,6 +82,7 @@ contract SabiBillCrossChainTest is Test {
     address alice     = address(0x2222);
 
     uint256 constant ONE_USDC = 1_000_000;
+    uint256 constant FAST_FEE = 100; // 0.0001 USDC — mô phỏng fee Fast Transfer
 
     // ─── Helper: build BurnMessageV2 body thật theo offset đã verify ──────────
     //
@@ -125,9 +140,7 @@ contract SabiBillCrossChainTest is Test {
         vm.prank(organizer);
         uint256 billId = sabiBill.createAssignedBill(amounts);
 
-        // Mint USDC vào SabiBill (giả lập receiveMessage đã mint)
-        usdc.mint(address(sabiBill), ONE_USDC);
-
+        // Không mint trước nữa — transmitter tự mint trong receiveMessage
         bytes memory hookData = abi.encode(billId, uint256(0)); // shareId = 0
         bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
 
@@ -149,14 +162,12 @@ contract SabiBillCrossChainTest is Test {
         vm.prank(organizer);
         uint256 billId = sabiBill.createAssignedBill(amounts);
 
-        // Lần 1 — thành công
-        usdc.mint(address(sabiBill), ONE_USDC);
+        // Lần 1 — thành công (transmitter tự mint)
         bytes memory hookData = abi.encode(billId, uint256(0));
         bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
         sabiBill.payCrossChain(message, bytes(""));
 
         // Lần 2 — revert AlreadyPaid
-        usdc.mint(address(sabiBill), ONE_USDC);
         vm.expectRevert(abi.encodeWithSelector(AlreadyPaid.selector, billId, 0));
         sabiBill.payCrossChain(message, bytes(""));
     }
@@ -169,12 +180,42 @@ contract SabiBillCrossChainTest is Test {
         vm.prank(organizer);
         uint256 billId = sabiBill.createAssignedBill(amounts);
 
-        usdc.mint(address(sabiBill), 500_000);
         bytes memory hookData = abi.encode(billId, uint256(0));
         bytes memory message  = _buildMessage(500_000, alice, hookData); // sai amount
 
         vm.expectRevert(abi.encodeWithSelector(WrongAmount.selector, billId, 0, 500_000, ONE_USDC));
         sabiBill.payCrossChain(message, bytes(""));
+    }
+
+    // ─── ASSIGNED mode — Fast Transfer (fee > 0) ─────────────────────────────
+
+    function test_CrossChain_Assigned_FastTransfer_FeeDeducted() public {
+        address[] memory wallets = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        wallets[0] = alice;
+        amounts[0] = ONE_USDC;
+        vm.prank(organizer);
+        uint256 billId = sabiBill.createAssignedBill(amounts);
+
+        // Bật fee — mô phỏng Fast Transfer: mint chỉ (amount - fee)
+        transmitter.setFee(FAST_FEE);
+
+        bytes memory hookData = abi.encode(billId, uint256(0));
+        bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
+
+        uint256 orgBefore = usdc.balanceOf(organizer);
+
+        // Event vẫn emit amount ĐẦY ĐỦ (số người trả đã burn)
+        vm.expectEmit(true, true, false, true, address(sabiBill));
+        emit SharePaid(billId, 0, alice, ONE_USDC);
+        sabiBill.payCrossChain(message, bytes(""));
+
+        // Organizer nhận đúng số THỰC MINT = amount - fee (không revert vì thiếu tiền)
+        assertEq(usdc.balanceOf(organizer), orgBefore + ONE_USDC - FAST_FEE);
+        // Share vẫn được đánh dấu paid — check amount so với số đã burn, không phải số nhận
+        assertTrue(sabiBill.getShare(billId, 0).paid);
+        // Contract không giữ lại đồng nào (no custody)
+        assertEq(usdc.balanceOf(address(sabiBill)), 0);
     }
 
     // ─── OPEN_SLOT mode ───────────────────────────────────────────────────────
@@ -183,7 +224,6 @@ contract SabiBillCrossChainTest is Test {
         vm.prank(organizer);
         uint256 billId = sabiBill.createOpenSlotBill(ONE_USDC, 3);
 
-        usdc.mint(address(sabiBill), ONE_USDC);
         bytes memory hookData = abi.encode(billId); // chỉ billId
         bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
 
@@ -202,7 +242,6 @@ contract SabiBillCrossChainTest is Test {
         uint256 billId = sabiBill.createOpenSlotBill(ONE_USDC, 3);
 
         uint256 wrongAmount = 500_000;
-        usdc.mint(address(sabiBill), wrongAmount);
         bytes memory hookData = abi.encode(billId);
         bytes memory message  = _buildMessage(wrongAmount, alice, hookData);
 
@@ -212,13 +251,34 @@ contract SabiBillCrossChainTest is Test {
         assertEq(sabiBill.getBill(billId).extraReceived, wrongAmount);
     }
 
+    // ─── OPEN_SLOT mode — Fast Transfer (fee > 0) ────────────────────────────
+
+    function test_CrossChain_OpenSlot_FastTransfer_FeeDeducted() public {
+        vm.prank(organizer);
+        uint256 billId = sabiBill.createOpenSlotBill(ONE_USDC, 3);
+
+        transmitter.setFee(FAST_FEE);
+
+        bytes memory hookData = abi.encode(billId);
+        bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
+
+        uint256 orgBefore = usdc.balanceOf(organizer);
+
+        sabiBill.payCrossChain(message, bytes(""));
+
+        // matched vẫn true — so amount (số đã burn) với amountPerSlot
+        assertEq(sabiBill.getBill(billId).matchedSlotsCount, 1);
+        // Organizer nhận số thực mint = amount - fee
+        assertEq(usdc.balanceOf(organizer), orgBefore + ONE_USDC - FAST_FEE);
+        assertEq(usdc.balanceOf(address(sabiBill)), 0);
+    }
+
     // ─── Edge cases ───────────────────────────────────────────────────────────
 
     function test_CrossChain_InvalidHookData_Reverts() public {
         vm.prank(organizer);
         sabiBill.createOpenSlotBill(ONE_USDC, 1);
 
-        usdc.mint(address(sabiBill), ONE_USDC);
         bytes memory hookData = bytes(""); // rỗng — không đủ 32 bytes
         bytes memory message  = _buildMessage(ONE_USDC, alice, hookData);
 

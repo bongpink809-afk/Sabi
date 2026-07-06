@@ -2,7 +2,11 @@ import { SabiBillABI } from './SabiBillABI'
 
 export { baseSepolia, arbitrumSepolia } from 'viem/chains'
 
-export const SABI_BILL_ADDRESS = '0xFbb7765FC0150C5D41bF85EedEb4a45747884Ce5' as const
+export const SABI_BILL_ADDRESS = '0x192963eBcC9f39C0057597CF3AA7d97c99a83c75' as const
+// Block chứa tx deploy SabiBill — quét event từ đây, trước đó không có gì.
+// NHỚ cập nhật cùng lúc mỗi lần redeploy contract.
+export const SABI_BILL_DEPLOY_BLOCK = 50295105n // block deploy tx 0x2748…b141 — cập nhật mỗi lần redeploy
+
 
 export const SABI_BILL_ABI = SabiBillABI
 
@@ -52,6 +56,9 @@ export const ERC20_ABI = [
   // ─── Arbitrum Sepolia (nguồn burn thứ 2) ───────────────────────────────
   export const ARBITRUM_SEPOLIA_USDC_ADDRESS = '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d' as const
   export const ARBITRUM_SEPOLIA_DOMAIN = 3
+  // Ethereum Sepolia — verify từ developers.circle.com/stablecoins/usdc-contract-addresses (05/07/2026)
+  export const ETHEREUM_SEPOLIA_USDC_ADDRESS = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238' as const
+  export const ETHEREUM_SEPOLIA_DOMAIN = 0
 
   // ─── Arc Testnet (đích relay) ───────────────────────────────────────────
   export const ARC_DOMAIN = 26

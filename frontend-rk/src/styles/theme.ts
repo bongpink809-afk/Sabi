@@ -3,41 +3,54 @@
 // Quy tắc: không viết hex trực tiếp trong component nữa, chỉ import từ đây.
 
 export const colors = {
-  // Thương hiệu / hành động chính (nút, link, logo)
-  primary: '#4f46e5',
-  primaryHover: '#4338ca',
+  // Accent thương hiệu (link, border chọn, icon, chữ nhấn) — KHÔNG dùng cho nền nút chính,
+  // xem buttonPrimary bên dưới. Bảng màu lavender/violet theo prototype v7.
+  primary: '#7C6AEF',
+  primaryHover: '#6952E0',
+
+  // Nền nút hành động chính (Tạo bill, Approve, Trả tiền...) — than đen theo thiết kế,
+  // tách riêng khỏi `primary` vì trước đây dùng chung 1 token cho cả nút lẫn accent/link.
+  buttonPrimary: '#17151F',
+  buttonPrimaryHover: '#2B2838',
 
   // Nền
-  surface: '#ffffff',          // nền card/box
-  background: '#fafafa',       // nền trang
-  backgroundSubtle: '#f8fafc', // nền phụ (box link, ô nhạt)
-  selectedBg: '#faf5ff',       // nền khi item được chọn
+  surface: '#FFFFFF',          // nền card/box
+  background: '#F5F2FE',       // nền trang (lavender sáng)
+  backgroundSubtle: '#EFEBFF', // nền phụ (box link, ô nhạt) — violet-bg
+  selectedBg: '#EFEBFF',       // nền khi item được chọn
 
   // Viền
-  border: '#e2e8f0',
-  borderLight: '#f1f5f9',
+  border: '#E5E0F4',
+  borderLight: '#E5E0F4',
 
   // Chữ
-  textPrimary: '#0f172a',
-  textSecondary: '#64748b',
-  textMuted: '#94a3b8',
-  label: '#374151',
-  bodyText: '#334155',
+  textPrimary: '#17151F',
+  textSecondary: '#6E6A80',
+  textMuted: '#6E6A80',
+  label: '#6E6A80',
+  bodyText: '#17151F',
 
   // Trạng thái
-  success: '#16a34a',
-  successBg: '#f0fdf4',
-  successText: '#166534',
-  danger: '#ef4444',
-  warning: '#f59e0b',
+  success: '#17A268',
+  successBg: '#DFF5EA',
+  successText: '#17A268',
+  danger: '#DE4763',
+  dangerBg: '#FCE7EB', // nền badge "CHƯA TRẢ" (rose-soft) — đi cùng cặp success/successBg
+  warning: '#D98E12',
+  warningBg: '#FBF0D8', // nền badge "ĐANG THU" (amber-soft)
 
   // Badge tím nhạt (mục "how it works" ở trang chủ)
-  badgeBg: '#ede9fe',
-  badgeText: '#6d28d9',
+  badgeBg: '#EFEBFF',
+  badgeText: '#7C6AEF',
 
   // Màu đổ bóng nhẹ cho card — dùng trong box-shadow, KHÔNG dùng làm màu nền/chữ
   // ví dụ: boxShadow: `0 1px 2px ${colors.shadowColor}`
-  shadowColor: '#0001',
+  shadowColor: '#6050B414',
+
+  // Riêng cho panel "hoá đơn" xem trước (receipt) — tông ink/mut hơi khác chữ
+  // thường một chút, đúng theo prototype (paper-ink/paper-mut), không dùng nơi khác
+  paperInk: '#1B1926',
+  paperMuted: '#8A8699',
 } as const
 
 export const radius = {
