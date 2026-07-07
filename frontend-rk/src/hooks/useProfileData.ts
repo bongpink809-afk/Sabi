@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { usePublicClient, useReadContracts } from 'wagmi'
+import { HttpRequestError } from 'viem'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI, SABI_BILL_DEPLOY_BLOCK } from '../lib/contracts'
 import { arcTestnet } from '../wagmi'
 
@@ -35,32 +36,56 @@ interface ProfileData {
 const CHUNK_SIZE = 5000n
 const MAX_CHUNKS = 50
 
+// RPC public Arc Testnet rate-limit (429) khi nhiều chunk getLogs bắn song
+// song cùng lúc — retry với backoff, giống bill/[id].tsx
+async function withRetry429<T>(fn: () => Promise<T>, retries = 3, delayMs = 600): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    if (err instanceof HttpRequestError && err.status === 429 && retries > 0) {
+      await new Promise((r) => setTimeout(r, delayMs))
+      return withRetry429(fn, retries - 1, delayMs * 2)
+    }
+    throw err
+  }
+}
+
 async function scanLogs(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   eventName: 'BillCreated' | 'SharePaid' | 'SlotFilled',
   args: Record<string, unknown> | undefined,
   latestBlock: bigint
 ): Promise<any[]> {
-  const allLogs: any[] = []
+  // Tính trước toàn bộ khoảng [fromBlock,toBlock] của từng chunk rồi bắn SONG
+  // SONG bằng Promise.all — trước đây await tuần tự từng chunk một, tới 50
+  // chunk/event cộng dồn round-trip khiến Hồ sơ tải ~15-20s dù không hề dính 429.
+  const ranges: { fromBlock: bigint; toBlock: bigint }[] = []
   let toBlock = latestBlock
   let chunkCount = 0
   while (toBlock >= 0n && chunkCount < MAX_CHUNKS) {
     const rawFrom = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : 0n
     const fromBlock = rawFrom < SABI_BILL_DEPLOY_BLOCK ? SABI_BILL_DEPLOY_BLOCK : rawFrom
-    const logs = await publicClient.getContractEvents({
-      address: SABI_BILL_ADDRESS,
-      abi: SABI_BILL_ABI,
-      eventName,
-      args,
-      fromBlock,
-      toBlock,
-    })
-    allLogs.push(...logs)
+    ranges.push({ fromBlock, toBlock })
     chunkCount++
     if (fromBlock <= SABI_BILL_DEPLOY_BLOCK) break
     toBlock = fromBlock - 1n
   }
-  return allLogs
+
+  const chunkResults = await Promise.all(
+    ranges.map(({ fromBlock, toBlock }) =>
+      withRetry429(() =>
+        publicClient.getContractEvents({
+          address: SABI_BILL_ADDRESS,
+          abi: SABI_BILL_ABI,
+          eventName,
+          args,
+          fromBlock,
+          toBlock,
+        })
+      )
+    )
+  )
+  return chunkResults.flat()
 }
 
 async function fetchProfileData(

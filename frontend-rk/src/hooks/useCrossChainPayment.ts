@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAccount, usePublicClient } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import { useBurnCrossChain, SourceChain } from './useBurnCrossChain'
-import { usePollAttestation } from './usePollAttestation'
+import { usePollAttestation, AttestationTimeoutError } from './usePollAttestation'
 import { usePayCrossChain } from './usePayCrossChain'
 import {
   baseSepolia,
@@ -30,6 +30,7 @@ export type CrossChainErrorType =
   | 'user_rejected'
   | 'burn_reverted'
   | 'relay_failed'
+  | 'attestation_delayed'
 
 export interface CrossChainState {
   status: CrossChainStatus
@@ -85,6 +86,16 @@ function clearState(billId: string, shareId: number | undefined, address: `0x${s
 }
 
 function classifyError(err: unknown): { type: CrossChainErrorType; message: string } {
+  // Hết 30 phút chờ attestation KHÔNG phải burn thất bại hay lỗi mạng — tiền đã
+  // burn thành công, chỉ là Circle xử lý lâu bất thường (hiếm, có thể do tạm dừng
+  // attestation). Phải phân biệt với lỗi thật để không báo "thất bại" sai sự thật.
+  if (err instanceof AttestationTimeoutError) {
+    return {
+      type: 'attestation_delayed',
+      message: 'Circle đang xử lý lâu hơn bình thường. Tiền không mất — hệ thống sẽ tiếp tục chờ, quay lại sau.',
+    }
+  }
+
   const message = err instanceof Error ? err.message : String(err)
 
   if (message.includes('rejected') || (err as any)?.code === 4001) {
@@ -106,7 +117,7 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
   const publicClientEthereum = usePublicClient({ chainId: sepolia.id })
   const publicClients = { base: publicClientBase, arbitrum: publicClientArbitrum, ethereum: publicClientEthereum }
   const { burn } = useBurnCrossChain()
-  const { poll } = usePollAttestation()
+  const { poll, isDelayed } = usePollAttestation()
   const { relay } = usePayCrossChain()
 
   const billIdStr = billId.toString()
@@ -159,7 +170,13 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     const saved = loadState(billIdStr, shareId, address)
     const nextState = saved ?? { status: 'idle' as const, billId: billIdStr, shareId }
     setState(nextState)
-    if (nextState.status === 'waiting_attestation' && nextState.burnTxHash && nextState.sourceChain) {
+    // 'attestation_delayed' cũng phải tự tiếp tục chờ khi quay lại — đây là lời hứa
+    // ngay trong message hiện cho user ("quay lại sau, hệ thống sẽ tự tiếp tục"),
+    // không resume thì message nói dối trong khi tiền vẫn đang chờ Circle thật.
+    const shouldResume =
+      nextState.status === 'waiting_attestation' ||
+      (nextState.status === 'error' && nextState.errorType === 'attestation_delayed')
+    if (shouldResume && nextState.burnTxHash && nextState.sourceChain) {
       continueFromAttestation(nextState.burnTxHash, nextState.sourceChain)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,5 +235,5 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
     setState({ status: 'idle', billId: billIdStr, shareId })
   }
 
-  return { state, start, reset }
+  return { state, start, reset, isDelayed }
 }

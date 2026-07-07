@@ -19,11 +19,13 @@ export function CrossChainStatusPanel({
     onRetry,
     onDismiss,
     contributorName,
+    isDelayed,
   }: {
     state: CrossChainState
     onRetry: () => void
     onDismiss: () => void
     contributorName?: string
+    isDelayed?: boolean
   }) {
   const chainDisplay = getChainDisplay(state.sourceChain)
 
@@ -77,6 +79,10 @@ export function CrossChainStatusPanel({
               rồi ký 1 giao dịch để ghi nhận tiền vào bill — không ký thì tiền chưa tới nơi.
             </p>
           </>
+        ) : isDelayed ? (
+          <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
+            Đang xử lý lâu hơn bình thường — tiền không mất, hệ thống vẫn đang chờ Circle xác nhận.
+          </p>
         ) : (
           <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
             Đang chờ Circle ký attestation ("thường 8–20 giây").
@@ -131,7 +137,7 @@ export function CrossChainStatusPanel({
       <Panel isError>
         <p style={{ color: colors.danger, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{title}</p>
         <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 12 }}>{description}</p>
-        {state.errorType === 'relay_failed' && state.burnTxHash && (       
+        {(state.errorType === 'relay_failed' || state.errorType === 'attestation_delayed') && state.burnTxHash && (
 <a
             href={`${chainDisplay.explorerBase}${state.burnTxHash}`}
             target="_blank"
@@ -189,6 +195,17 @@ function getErrorContent(state: CrossChainState, chainName: string) {
       return {
         title: 'Không hoàn tất được — cần hỗ trợ',
         description: `Tiền đã burn thành công trên ${chainName} nhưng chưa ghi nhận được trên Arc. Giữ lại mã tx bên dưới, liên hệ hỗ trợ để xử lý thủ công.`,
+        showRetry: false,
+      }
+    // Chờ lâu bất thường (>30 phút), KHÔNG phải burn thất bại hay lỗi mạng — tiền
+    // đã burn xong trên chainName, chỉ là Circle xử lý chậm hơn thường lệ (hiếm).
+    // Không cho "Thử lại" vì sẽ burn lần 2, mất tiền oan — chỉ có thể chờ tiếp.
+    case 'attestation_delayed':
+      return {
+        title: 'Vẫn đang chờ xử lý',
+        description:
+          state.errorMessage ??
+          `Tiền đã burn thành công trên ${chainName}, không mất. Circle đang xử lý lâu hơn bình thường — đóng tab và quay lại sau, hệ thống sẽ tự tiếp tục kiểm tra.`,
         showRetry: false,
       }
     default:

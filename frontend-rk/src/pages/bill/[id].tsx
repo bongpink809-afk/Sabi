@@ -4,7 +4,7 @@ import type { NextPage } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
-import { formatUnits } from 'viem'
+import { formatUnits, HttpRequestError } from 'viem'
 import { sepolia } from 'wagmi/chains'
 import { SABI_BILL_ADDRESS, SABI_BILL_DEPLOY_BLOCK, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
@@ -29,6 +29,21 @@ interface Contribution {
 // Dùng chung 1 type cho mọi nơi thay vì lặp lại union literal — trước đây
 // thêm 'ethereum' phải sửa rải rác 5 chỗ, dễ sót (đúng lỗi vừa xảy ra)
 type PayMethod = 'arc' | 'base' | 'arbitrum' | 'ethereum' | 'unsupported'
+
+// RPC public Arc Testnet rate-limit (429) khi nhiều chunk getLogs bắn song
+// song cùng lúc — retry với backoff thay vì để cả danh sách góp tiền/share
+// đã trả rớt trắng chỉ vì 1 chunk bị chặn thoáng qua
+async function withRetry429<T>(fn: () => Promise<T>, retries = 3, delayMs = 600): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    if (err instanceof HttpRequestError && err.status === 429 && retries > 0) {
+      await new Promise((r) => setTimeout(r, delayMs))
+      return withRetry429(fn, retries - 1, delayMs * 2)
+    }
+    throw err
+  }
+}
 
 const BillDetail: NextPage = () => {
   const router = useRouter()
@@ -102,14 +117,16 @@ const BillDetail: NextPage = () => {
 
       const chunkResults = await Promise.all(
         ranges.map(({ fromBlock, toBlock }) =>
-          publicClient.getContractEvents({
-            address: SABI_BILL_ADDRESS,
-            abi: SABI_BILL_ABI,
-            eventName: 'SlotFilled',
-            args: { billId },
-            fromBlock,
-            toBlock,
-          })
+          withRetry429(() =>
+            publicClient.getContractEvents({
+              address: SABI_BILL_ADDRESS,
+              abi: SABI_BILL_ABI,
+              eventName: 'SlotFilled',
+              args: { billId },
+              fromBlock,
+              toBlock,
+            })
+          )
         )
       )
       const allLogs = chunkResults.flat()
@@ -154,14 +171,16 @@ const BillDetail: NextPage = () => {
 
       const chunkResults = await Promise.all(
         ranges.map(({ fromBlock, toBlock }) =>
-          publicClient.getContractEvents({
-            address: SABI_BILL_ADDRESS,
-            abi: SABI_BILL_ABI,
-            eventName: 'SharePaid',
-            args: { billId },
-            fromBlock,
-            toBlock,
-          })
+          withRetry429(() =>
+            publicClient.getContractEvents({
+              address: SABI_BILL_ADDRESS,
+              abi: SABI_BILL_ABI,
+              eventName: 'SharePaid',
+              args: { billId },
+              fromBlock,
+              toBlock,
+            })
+          )
         )
       )
       const allLogs = chunkResults.flat()
@@ -1007,7 +1026,7 @@ function ShareRow({
   const [nameDraft, setNameDraft] = useState('')
 
   // Mỗi ShareRow tự quản lý trạng thái cross-chain của CHÍNH NÓ — độc lập hoàn toàn với share khác
-  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay } = useCrossChainPayment(billId, shareId)
+  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay, isDelayed: ccIsDelayed } = useCrossChainPayment(billId, shareId)
 
   useEffect(() => {
     if (paySuccess || ccState.status === 'success') refetchShare()
@@ -1238,7 +1257,7 @@ function ShareRow({
         <p style={{ color: colors.danger, fontSize: 11, marginTop: 6 }}>Lỗi: {payError.message.split('\n')[0]}</p>
       )}
       {ccState.status !== 'idle' && (
-        <CrossChainStatusPanel state={ccState} onRetry={handleRetryCrossChain} onDismiss={resetCrossChainPay} />
+        <CrossChainStatusPanel state={ccState} onRetry={handleRetryCrossChain} onDismiss={resetCrossChainPay} isDelayed={ccIsDelayed} />
       )}
     </div>
   )
@@ -1303,7 +1322,7 @@ function OpenSlotInfo({
   const chainDisplayNames = { base: 'Base Sepolia', arbitrum: 'Arbitrum Sepolia', ethereum: 'Ethereum Sepolia' } as const
 
   // OPEN_SLOT dùng shareId: undefined — đúng thiết kế gốc, không gắn 1 người/1 share cố định
-  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay } = useCrossChainPayment(billId, undefined)
+  const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay, isDelayed: ccIsDelayed } = useCrossChainPayment(billId, undefined)
   const isCrossChainBusy = !['idle', 'success', 'error'].includes(ccState.status)
 
   // Relay xong → kéo lại bill + danh sách góp (trước đây chỉ refetch khi trả trực tiếp,
@@ -1461,6 +1480,7 @@ function OpenSlotInfo({
           onRetry={handleRetryCrossChain}
           onDismiss={resetCrossChainPay}
           contributorName={contributorName}
+          isDelayed={ccIsDelayed}
         />
       )}
 
