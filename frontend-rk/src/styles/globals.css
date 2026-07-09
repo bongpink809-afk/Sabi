@@ -38,6 +38,20 @@ a {
   grid-template-columns: 1fr 400px;
   gap: 30px;
   align-items: start;
+  margin: 32px auto;
+}
+
+/* Khoảng đệm trên/dưới nội dung trang (main hoặc grid container) —
+   PC: đẩy xuống + cân bằng trên/dưới (mặc định trước đây dồn hết lên đầu
+   vì content thường thấp hơn viewport). Mobile giữ nguyên, không đổi. */
+@media (min-width: 769px) {
+  .sabi-page-main,
+  .sabi-grid-create {
+    padding-top: 56px !important;
+    padding-bottom: 56px !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+  }
 }
 
 /* bill/[id].tsx — receipt card (400px) + panel cột phải (1fr) */

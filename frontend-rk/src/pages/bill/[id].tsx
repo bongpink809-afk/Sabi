@@ -524,7 +524,7 @@ const BillDetail: NextPage = () => {
 
       <SabiHeader currentBillId={billId.toString()} />
 
-      <main style={{ padding: '24px 16px 40px' }}>
+      <main className="sabi-page-main" style={{ padding: '24px 16px 40px' }}>
         <div
           className="sabi-grid-detail"
           style={{

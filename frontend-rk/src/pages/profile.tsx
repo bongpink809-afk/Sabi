@@ -171,7 +171,7 @@ const Profile: NextPage = () => {
 
       <SabiHeader />
 
-      <main style={{ padding: '24px 16px 40px' }}>
+      <main className="sabi-page-main" style={{ padding: '24px 16px 40px' }}>
         <div style={{ maxWidth: 1080, margin: '0 auto' }}>
           {!isConnected || !address ? (
             <div
