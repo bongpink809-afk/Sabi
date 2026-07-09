@@ -3,12 +3,15 @@ import type { NextPage } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useState, useEffect } from 'react'
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
 import { parseUnits, parseEventLogs } from 'viem'
+import { baseSepolia, arbitrumSepolia } from 'wagmi/chains'
+import { sepolia } from 'wagmi/chains'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
 import { colors } from '../styles/theme'
 import { ModeCard } from '../components/ModeCard'
-import { MobileCta } from '../components/MobileCta'
+import { saveBillTitle, saveBillShareNames } from '../hooks/useFirebaseSync'
+
 import { SabiHeader } from '../components/SabiHeader'
 import { SabiLogo } from '../components/SabiLogo'
 
@@ -31,7 +34,17 @@ const Home: NextPage = () => {
   const [mode, setMode] = useState<BillMode>('ASSIGNED')
   const [billName, setBillName] = useState('')
   const { chainId: currentChainId } = useAccount()
-  const isWrongNetwork = currentChainId !== undefined && currentChainId !== arcTestnet.id
+  const { switchChainAsync, isPending: isSwitching } = useSwitchChain()
+  const [switchError, setSwitchError] = useState<string | null>(null)
+
+  // Chỉ báo "mạng sai" nếu KHÔNG thuộc 4 chain được hỗ trợ.
+  // Arc, Base Sepolia, Arb Sepolia, Eth Sepolia đều được chấp nhận —
+  // nút tạo bill sẽ tự switch sang Arc nếu đang ở chain khác trong 4 chain này.
+  const SUPPORTED_CHAIN_IDS: number[] = [arcTestnet.id, baseSepolia.id, arbitrumSepolia.id, sepolia.id]
+  const isOnArc = currentChainId === arcTestnet.id
+  const isWrongNetwork = currentChainId !== undefined && !SUPPORTED_CHAIN_IDS.includes(currentChainId as number)
+  // Đang ở chain hợp lệ nhưng không phải Arc → cần switch trước khi tạo bill
+  const needsSwitchToArc = currentChainId !== undefined && !isOnArc && !isWrongNetwork
 
   const [shares, setShares] = useState<ShareRow[]>([
     { name: '', amount: '' },
@@ -54,42 +67,57 @@ const Home: NextPage = () => {
   // (billId không có sẵn trong response tx — phải giải mã log mới lấy được)
   useEffect(() => {
     if (!isSuccess || !receipt) return
-    try {
-      const logs = parseEventLogs({
-        abi: SABI_BILL_ABI,
-        logs: receipt.logs,
-        eventName: 'BillCreated',
-      })
-      if (logs.length > 0) {
-        const newBillId = logs[0].args.billId as bigint
+    ;(async () => {
+      try {
+        const logs = parseEventLogs({
+          abi: SABI_BILL_ABI,
+          logs: receipt.logs,
+          eventName: 'BillCreated',
+        })
+        if (logs.length > 0) {
+          const newBillId = logs[0].args.billId as bigint
+          const billIdStr = newBillId.toString()
 
-        // Lưu tên các share vào localStorage — contract không lưu tên,
-        // trang /bill/[id] cần đọc lại từ đây để hiện đúng tên thay vì "Phần #n"
-        if (mode === 'ASSIGNED') {
-          const namesMap: Record<number, string> = {}
-          shares
-            .filter((s) => s.amount)
-            .forEach((s, i) => {
-              if (s.name.trim()) namesMap[i] = s.name.trim()
-            })
-          if (Object.keys(namesMap).length > 0) {
-            localStorage.setItem(`sabi-bill-${newBillId.toString()}-names`, JSON.stringify(namesMap))
+          // Lưu tên các share vào localStorage + Firebase Firestore —
+          // Firestore cho phép thiết bị khác đọc được tên ngay sau khi tạo.
+          if (mode === 'ASSIGNED') {
+            const namesMap: Record<number, string> = {}
+            shares
+              .filter((s) => s.amount)
+              .forEach((s, i) => {
+                if (s.name.trim()) namesMap[i] = s.name.trim()
+              })
+            if (Object.keys(namesMap).length > 0) {
+              // localStorage (local, instant)
+              localStorage.setItem(`sabi-bill-${billIdStr}-names`, JSON.stringify(namesMap))
+              // Firebase Firestore (sync across devices)
+              saveBillShareNames(billIdStr, namesMap)
+            }
           }
-        }
 
-        // Lưu tên bill — contract không có field này, chỉ lưu frontend
-        if (billName.trim()) {
-          localStorage.setItem(`sabi-bill-${newBillId.toString()}-title`, billName.trim())
-        }
+          // Lưu tên bill vào localStorage + Firebase Firestore
+          if (billName.trim()) {
+            localStorage.setItem(`sabi-bill-${billIdStr}-title`, billName.trim())
+            saveBillTitle(billIdStr, billName.trim())
+          }
 
-        // Sang Hồ sơ — bill vừa tạo hiện ngay trong "Bill đã tạo"
+          // Micro-delay để đảm bảo localStorage flush trước khi navigate
+          // (mobile Safari/Chrome đôi khi chưa persist khi navigate ngay)
+          await new Promise((r) => setTimeout(r, 80))
+
+          // Sang trang chi tiết bill — thay vì /profile để user thấy ngay hóa đơn
+          router.push(`/bill/${billIdStr}`)
+        } else {
+          console.error('Không tìm thấy event BillCreated trong log')
+          // Vẫn navigate về profile để user không bị kẹt màn hình
+          router.push('/profile')
+        }
+      } catch (err) {
+        console.error('Lỗi đọc billId từ log:', err)
+        // Vẫn navigate để không bị kẹt
         router.push('/profile')
-      } else {
-        console.error('Không tìm thấy event BillCreated trong log')
       }
-    } catch (err) {
-      console.error('Lỗi đọc billId từ log:', err)
-    }
+    })()
   }, [isSuccess, receipt])
 
   const totalAssigned = shares.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
@@ -103,8 +131,32 @@ const Home: NextPage = () => {
   }
   const removeShare = (i: number) => setShares(shares.filter((_, idx) => idx !== i))
 
+  const handleSwitchToArc = async () => {
+    setSwitchError(null)
+    try {
+      await switchChainAsync({ chainId: arcTestnet.id })
+    } catch (err: any) {
+      // User từ chối hoặc ví không phản hồi — hiện thông báo hướng dẫn
+      if (!err?.message?.includes('rejected')) {
+        setSwitchError('Mở app ví và xác nhận đổi sang Arc Testnet')
+        setTimeout(() => setSwitchError(null), 5000)
+      }
+    }
+  }
+
   const handleCreate = async () => {
     if (!isConnected) return
+    setSwitchError(null)
+    // Nếu đang ở chain hợp lệ nhưng không phải Arc → switch trước rồi tạo
+    if (needsSwitchToArc) {
+      try {
+        await switchChainAsync({ chainId: arcTestnet.id })
+      } catch {
+        setSwitchError('Mở app ví và xác nhận đổi sang Arc Testnet')
+        setTimeout(() => setSwitchError(null), 5000)
+        return
+      }
+    }
     try {
       if (mode === 'ASSIGNED') {
         const amounts = shares
@@ -142,18 +194,15 @@ const Home: NextPage = () => {
       <Head><title>Tạo bill — Sabi</title></Head>
       <SabiHeader />
       <div
+        className="sabi-grid-create"
         style={{
           maxWidth: 1080,
           margin: '32px auto',
           padding: '0 16px',
-          display: 'grid',
-          gridTemplateColumns: '1fr 400px',
-          gap: 30,
-          alignItems: 'start',
         }}
       >
         <div>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+          <div className="sabi-mode-cards">
             <ModeCard
               mode="assigned"
               tag="ASSIGNED"
@@ -204,40 +253,60 @@ const Home: NextPage = () => {
             </>
           )}
 
-          <button
-            onClick={handleCreate}
-            style={{ ...primaryBtn, marginTop: 16, width: '100%' }}
-            disabled={!isConnected || isPending || isConfirming || isWrongNetwork || formIncomplete}
-          >
-            {!isConnected
-              ? 'Kết nối ví để tạo bill'
-              : isWrongNetwork
-              ? 'Đổi sang Arc Testnet để tạo bill'
-              : isPending
-              ? 'Đang xác nhận trong ví...'
-              : isConfirming
-              ? 'Đang tạo bill...'
-              : isSuccess
-              ? 'Đang chuyển trang...'
-              : 'Tạo bill'}
-          </button>
+          {/* Nút đổi mạng riêng — chỉ hiện khi ở sai mạng hoàn toàn (ngoài 4 chain) */}
+          {isWrongNetwork && (
+            <button
+              onClick={handleSwitchToArc}
+              disabled={isSwitching}
+              style={{ ...primaryBtn, marginTop: 16, width: '100%', background: isSwitching ? colors.textMuted : '#e07c00' }}
+            >
+              {isSwitching ? 'Đang đổi mạng...' : '⚡ Bấm đây để đổi sang Arc Testnet'}
+            </button>
+          )}
+
+          {/* Nút tạo bill — ẩn khi sai mạng hoàn toàn */}
+          {!isWrongNetwork && (
+            <button
+              onClick={needsSwitchToArc ? handleCreate : handleCreate}
+              style={{ ...primaryBtn, marginTop: 16, width: '100%' }}
+              disabled={!isConnected || isPending || isConfirming || isSwitching || formIncomplete}
+            >
+              {!isConnected
+                ? 'Kết nối ví để tạo bill'
+                : isSwitching
+                ? 'Đang đổi sang Arc...'
+                : needsSwitchToArc
+                ? '⚡ Chuyển sang Arc & tạo bill'
+                : isPending
+                ? 'Đang xác nhận trong ví...'
+                : isConfirming
+                ? 'Đang tạo bill...'
+                : isSuccess
+                ? 'Đang chuyển trang...'
+                : 'Tạo bill'}
+            </button>
+          )}
+
+          {switchError && (
+            <p style={{ fontSize: 12, color: '#e07c00', fontFamily: 'sans-serif', marginTop: 8, textAlign: 'center' }}>
+              📱 {switchError}
+            </p>
+          )}
           <p style={{ fontSize: 12, color: colors.textPrimary, fontFamily: 'sans-serif', marginTop: 10, textAlign: 'center' }}>
             <span style={{ color: colors.primary }}>⚠</span> Không thể chỉnh sửa sau khi tạo.
           </p>
         </div>
 
-        <ReceiptPreview
-          billName={billName}
-          mode={mode}
-          shares={shares}
-          amountPerSlot={amountPerSlotComputed}
-          numSlots={numSlots}
-          total={mode === 'ASSIGNED' ? totalAssigned : totalOpen}
-        />
-      </div>
-
-      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '0 16px 40px' }}>
-        <MobileCta />
+        <div className="sabi-receipt-preview-hide-mobile">
+          <ReceiptPreview
+            billName={billName}
+            mode={mode}
+            shares={shares}
+            amountPerSlot={amountPerSlotComputed}
+            numSlots={numSlots}
+            total={mode === 'ASSIGNED' ? totalAssigned : totalOpen}
+          />
+        </div>
       </div>
     </div>
   )
@@ -298,27 +367,6 @@ function ReceiptPreview({
         </span>
       </div>
       <ReceiptDash />
-
-      <div
-        style={{
-          width: 150,
-          height: 150,
-          margin: '12px auto 6px',
-          display: 'grid',
-          placeItems: 'center',
-          border: `1.5px dashed ${colors.borderLight}`,
-          borderRadius: 8,
-          color: colors.paperMuted,
-          fontSize: 10,
-          textAlign: 'center',
-          padding: 8,
-        }}
-      >
-        QR thật sẽ hiện ở đây sau khi tạo bill
-      </div>
-      <div style={{ textAlign: 'center', fontSize: 9, color: colors.paperMuted, letterSpacing: 1, marginTop: 7 }}>
-        QUÉT ĐỂ MỞ TRANG TRẢ TIỀN
-      </div>
 
       <style jsx>{`
         .receipt {
@@ -389,7 +437,7 @@ function ReceiptRow({ k, v }: { k: string; v: string }) {
   )
 }
 
-const wrap: React.CSSProperties = { minHeight: '100vh', fontFamily: 'sans-serif', background: colors.background }
+const wrap: React.CSSProperties = { minHeight: '100vh', fontFamily: 'sans-serif', background: colors.background, overflowX: 'hidden', maxWidth: '100vw' }
 const input: React.CSSProperties = {
   width: '100%',
   background: colors.surface,

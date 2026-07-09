@@ -12,6 +12,14 @@ function getChainDisplay(sourceChain: CrossChainState['sourceChain']) {
   return sourceChain ? SOURCE_CHAIN_DISPLAY[sourceChain] : { name: 'chain nguồn', explorerBase: '#' }
 }
 
+// Faucet gas ETH testnet riêng từng chain nguồn — balance check ("insufficient_balance")
+// chỉ kiểm tra USDC, nhưng user thiếu ETH để trả gas cũng bị kẹt y hệt, nên đưa cả 2 loại faucet
+const GAS_FAUCET_URL = {
+  base: 'https://www.alchemy.com/faucets/base-sepolia',
+  arbitrum: 'https://www.alchemy.com/faucets/arbitrum-sepolia',
+  ethereum: 'https://www.alchemy.com/faucets/ethereum-sepolia',
+} as const
+
 // D1 — Pending attestation: hiện khi đang chờ Circle ký xác nhận sau khi đã burn xong
 // D2 — Error: hiện 1 trong 4 case, mỗi case có message + hành động phù hợp riêng
 export function CrossChainStatusPanel({
@@ -153,6 +161,31 @@ export function CrossChainStatusPanel({
           >
             Mã tx burn (giữ lại để đối chiếu): {state.burnTxHash}
           </a>
+        )}
+        {state.errorType === 'insufficient_balance' && (
+          <div style={{ marginBottom: 12 }}>
+            <a
+              href="https://faucet.circle.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: 'inline-block', marginRight: 12, color: colors.primary, fontSize: 12, fontWeight: 600, textDecoration: 'underline' }}
+            >
+              Lấy USDC test ↗
+            </a>
+            {state.sourceChain && (
+              <a
+                href={GAS_FAUCET_URL[state.sourceChain]}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: 'inline-block', color: colors.primary, fontSize: 12, fontWeight: 600, textDecoration: 'underline' }}
+              >
+                Lấy {chainDisplay.name} ETH test ↗
+              </a>
+            )}
+            <p style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
+              Faucet Circle giới hạn ~20 USDC / 2 giờ / địa chỉ / chain — nếu vừa lấy rồi thì đợi một lúc, không phải faucet hỏng.
+            </p>
+          </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
           {showRetry && (

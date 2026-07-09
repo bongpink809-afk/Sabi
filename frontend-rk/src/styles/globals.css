@@ -2,6 +2,9 @@ html,
 body {
   padding: 0;
   margin: 0;
+  /* Chặn scroll ngang — bất kỳ element nào tràn chiều rộng đều bị cắt */
+  overflow-x: hidden;
+  max-width: 100%;
   font-family:
     -apple-system,
     BlinkMacSystemFont,
@@ -23,4 +26,89 @@ a {
 
 * {
   box-sizing: border-box;
+  /* Không để phần tử con tràn ra ngoài parent */
+  min-width: 0;
+}
+
+/* ─── Responsive layout ──────────────────────────────────────────────────── */
+
+/* index.tsx — form (1fr) + receipt preview (400px) */
+.sabi-grid-create {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 30px;
+  align-items: start;
+}
+
+/* bill/[id].tsx — receipt card (400px) + panel cột phải (1fr) */
+.sabi-grid-detail {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 30px;
+  align-items: start;
+}
+
+/* profile.tsx — bill đã tạo (1fr) + bill đã trả (1fr) */
+.sabi-grid-profile {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+
+/* 2 mode card cạnh nhau — wrap khi không đủ rộng */
+.sabi-mode-cards {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.sabi-mode-cards > * {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .sabi-grid-create,
+  .sabi-grid-profile {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+
+  /* Chi tiết bill: đảo thứ tự — panel trả tiền lên trên, receipt xuống dưới */
+  .sabi-grid-detail {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+  .sabi-grid-detail > *:first-child {
+    order: 2; /* ReceiptCard xuống dưới */
+  }
+  .sabi-grid-detail > *:last-child {
+    order: 1; /* Panel trả tiền lên trên */
+  }
+
+  /* Receipt preview trên trang Tạo bill: ẩn đi trên mobile — không cần thiết */
+  .sabi-receipt-preview-hide-mobile {
+    display: none !important;
+  }
+
+  /* Header — padding nhỏ hơn, không để RainbowKit button tràn */
+  .sabi-header-inner {
+    padding: 10px 12px !important;
+    flex-wrap: wrap;
+  }
+
+  /* Giảm padding trang trên mobile */
+  main[style] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  /* Participant row — ô tên + số tiền không tràn */
+  .sabi-participant-row {
+    flex-wrap: wrap;
+  }
+  .sabi-participant-row input {
+    min-width: 80px;
+  }
 }

@@ -208,11 +208,14 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
 
       updateState({ status: 'burning' })
 
+      // Timeout 45s cho cả bước burn — mobile wallet thường đóng popup mà không
+      // trả error (khác PC), gây state 'burning' kẹt vĩnh viễn. Nếu quá 45s
+      // không có phản hồi → tự reset về idle giống cơ chế approve ở trên.
       const BURN_TIMEOUT_MS = 45000
       const burnTxHash = await Promise.race([
         burn({ sourceChain, amount, billId, shareId: effectiveShareId }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Hết thời gian chờ ký giao dịch burn')), BURN_TIMEOUT_MS)
+          setTimeout(() => reject(new Error('timeout_user_rejected')), BURN_TIMEOUT_MS)
         ),
       ])
 
@@ -220,6 +223,13 @@ export function useCrossChainPayment(billId: bigint, shareId: number | undefined
 
       await continueFromAttestation(burnTxHash, sourceChain)
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      // Timeout tự đặt → xử lý như user_rejected: reset về idle thay vì hiện lỗi
+      if (errMsg === 'timeout_user_rejected') {
+        clearState(billIdStr, shareId, address)
+        setState({ status: 'idle', billId: billIdStr, shareId })
+        return
+      }
       const { type, message } = classifyError(err)
       if (type === 'user_rejected') {
         clearState(billIdStr, shareId, address)

@@ -7,8 +7,10 @@ import { useEffect, useRef, useState } from 'react'
 import { formatUnits, toFunctionSelector } from 'viem'
 import { colors, radius } from '../styles/theme'
 import { SabiHeader } from '../components/SabiHeader'
+import { SabiLogo } from '../components/SabiLogo'
 import { arcTestnet } from '../wagmi'
 import { useProfileData, useBillsProgress, BillProgress, CreatedBill, PaymentMade } from '../hooks/useProfileData'
+import { useUserProfileSync, useBillTitlesSync, saveProfileName as firebaseSaveProfileName, saveAvatar as firebaseSaveAvatar } from '../hooks/useFirebaseSync'
 
 const PAGE_SIZE = 5
 
@@ -18,11 +20,16 @@ const PAGE_SIZE = 5
 // chính xác (dữ liệu đó không tồn tại lại được ở phía Arc sau khi relay xong).
 const PAY_CROSSCHAIN_SELECTOR = toFunctionSelector('function payCrossChain(bytes message, bytes attestation)')
 
-// Tên bill chỉ lưu ở frontend theo billId (contract không lưu) — đọc lại
-// đúng key đã dùng ở create.tsx/bill/[id].tsx, fallback "Bill #n" nếu chưa có
-function getBillTitle(billId: bigint): string {
-  if (typeof window === 'undefined') return `Bill #${billId.toString()}`
-  return localStorage.getItem(`sabi-bill-${billId.toString()}-title`) ?? `Bill #${billId.toString()}`
+// Tên bill đọc từ localStorage (nếu có) hoặc Firestore (qua billTitles state)
+function getBillTitleFromMap(billId: bigint, firestoreTitles: Record<string, string>): string {
+  const id = billId.toString()
+  // Ƭu tiên Firestore (mới nhất), fallback localStorage, fallback "Bill #n"
+  if (firestoreTitles[id]) return firestoreTitles[id]
+  if (typeof window !== 'undefined') {
+    const local = localStorage.getItem(`sabi-bill-${id}-title`)
+    if (local) return local
+  }
+  return `Bill #${id}`
 }
 
 const Profile: NextPage = () => {
@@ -31,36 +38,62 @@ const Profile: NextPage = () => {
   const [createdPage, setCreatedPage] = useState(0)
   const [paidPage, setPaidPage] = useState(0)
 
-  // Tên tự đặt cho hồ sơ của chính mình — chỉ lưu local trên máy này theo địa chỉ ví,
-  // contract không có khái niệm "tên người dùng". Cùng cơ chế đã dùng cho tên người
-  // tham gia/người góp ở bill/[id].tsx.
+  // Tên tự đặt cho hồ sơ của chính mình — đồng bộ realtime qua Firebase Firestore.
+  // Khi đổi tên trên PC → điện thoại tự cập nhật mà không cần reload.
   const [profileName, setProfileName] = useState('')
   const [nameDraft, setNameDraft] = useState('')
+
+  // Đọc localStorage trước — hiện ngay khi load, Firebase sẽ ghi đè nếu có data mới hơn
   useEffect(() => {
     if (!address) return
     const saved = localStorage.getItem(`sabi-profile-name-${address.toLowerCase()}`)
     setProfileName(saved ?? '')
   }, [address])
-  const saveProfileName = () => {
+
+  // Firebase realtime listener — tự cập nhật khi đổi từ thiết bị khác
+  // Bỏ check !== profileName để tránh stale closure bỏ qua update
+  useUserProfileSync(address, (data) => {
+    if (data.profileName) setProfileName(data.profileName)
+    if (data.avatarUrl) {
+      // Tải avatar URL từ Firebase Storage — dùng URL thay vì base64 để nhẹ hơn
+      setAvatarUrl(data.avatarUrl)
+    }
+  })
+
+  const saveProfileNameFn = () => {
     if (!address || !nameDraft.trim()) return
     const name = nameDraft.trim()
-    localStorage.setItem(`sabi-profile-name-${address.toLowerCase()}`, name)
+    // localStorage (instant) + Firebase Firestore (sync đến mọi thiết bị)
+    firebaseSaveProfileName(address, name)
     setProfileName(name)
+    setNameDraft('')
   }
 
-  // Ảnh đại diện — chọn ảnh trên máy, thu nhỏ + crop vuông qua canvas, XEM TRƯỚC
-  // rồi mới bấm "Lưu ảnh" mới thật sự ghi vào localStorage (avatarDraftUrl khác
-  // avatarUrl để tách rõ 2 bước, không tự lưu ngay khi chọn file). Chỉ lưu local,
-  // không upload lên đâu cả — giống mọi dữ liệu cá nhân khác trong app này.
+  // Avatar — tải từ localStorage trước, Firebase Storage URL sẽ ghi đè qua useUserProfileSync
   const [avatarUrl, setAvatarUrl] = useState('')
   const [avatarDraftUrl, setAvatarDraftUrl] = useState('')
   const avatarInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (!address) return
-    const saved = localStorage.getItem(`sabi-profile-avatar-${address.toLowerCase()}`)
-    setAvatarUrl(saved ?? '')
+    const key = address.toLowerCase()
+    // Thử avatarUrl từ Firebase Storage trước (đồng bộ giữa thiết bị)
+    const storageUrl = localStorage.getItem(`sabi-profile-avatar-url-${key}`)
+    if (storageUrl) {
+      setAvatarUrl(storageUrl)
+    } else {
+      // Fallback: base64 cũ trong localStorage
+      const base64 = localStorage.getItem(`sabi-profile-avatar-${key}`)
+      setAvatarUrl(base64 ?? '')
+    }
     setAvatarDraftUrl('')
   }, [address])
+
+  // Bill titles từ Firestore — đồng bộ sau khi có danh sách bill từ on-chain
+  const [firestoreBillTitles, setFirestoreBillTitles] = useState<Record<string, string>>({})
+  const billIdsToSync = billsCreated.map((b) => b.billId.toString())
+  useBillTitlesSync(billIdsToSync, (titles) => {
+    setFirestoreBillTitles((prev) => ({ ...prev, ...titles }))
+  })
 
   const handleAvatarFile = (file: File) => {
     const reader = new FileReader()
@@ -85,11 +118,13 @@ const Profile: NextPage = () => {
     reader.readAsDataURL(file)
   }
 
-  const saveAvatar = () => {
+  const saveAvatar = async () => {
     if (!address || !avatarDraftUrl) return
-    localStorage.setItem(`sabi-profile-avatar-${address.toLowerCase()}`, avatarDraftUrl)
+    // Hiện preview ngay
     setAvatarUrl(avatarDraftUrl)
     setAvatarDraftUrl('')
+    // Upload lên Firebase Storage + lưu URL vào Firestore (background)
+    await firebaseSaveAvatar(address, avatarDraftUrl)
   }
 
   const cancelAvatarDraft = () => setAvatarDraftUrl('')
@@ -184,8 +219,10 @@ const Profile: NextPage = () => {
                         alt="Ảnh đại diện"
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
+                    ) : profileName ? (
+                      <span style={{ fontSize: 22, fontWeight: 700 }}>{profileName.charAt(0).toUpperCase()}</span>
                     ) : (
-                      (profileName ? profileName.charAt(0) : address.slice(2, 3)).toUpperCase()
+                      <SabiLogo size={40} />
                     )}
                   </div>
                   {/* Nút camera hiện rõ ra ngoài — trước đây bấm thẳng vào avatar mới
@@ -267,7 +304,7 @@ const Profile: NextPage = () => {
                         }}
                       />
                       <button
-                        onClick={saveProfileName}
+                        onClick={saveProfileNameFn}
                         disabled={!nameDraft.trim()}
                         style={{
                           fontSize: 12,
@@ -311,11 +348,11 @@ const Profile: NextPage = () => {
                 </p>
               )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 22 }}>
+              <div className="sabi-grid-profile">
                 <Section title="Bill đã tạo" sub="Bấm vào để mở trang chi tiết">
                   {!isLoading && billsCreated.length === 0 && <EmptyRow text="Chưa tạo bill nào." />}
                   {visibleCreated.map((bill) => (
-                    <CreatedBillRow key={bill.txHash} bill={bill} progress={billsProgress[bill.billId.toString()]} />
+                    <CreatedBillRow key={bill.txHash} bill={bill} progress={billsProgress[bill.billId.toString()]} titleMap={firestoreBillTitles} />
                   ))}
                   {totalCreatedPages > 1 && (
                     <Pagination page={currentCreatedPage} totalPages={totalCreatedPages} onChange={setCreatedPage} />
@@ -325,7 +362,7 @@ const Profile: NextPage = () => {
                 <Section title="Bill đã trả" sub="Mỗi dòng gắn tx hash thật — bấm mở arcscan">
                   {!isLoading && paymentsMade.length === 0 && <EmptyRow text="Chưa trả bill nào." />}
                   {visiblePaid.map((p, i) => (
-                    <PaymentRow key={`${p.txHash}-${i}`} payment={p} />
+                    <PaymentRow key={`${p.txHash}-${i}`} payment={p} titleMap={firestoreBillTitles} />
                   ))}
                   {totalPaidPages > 1 && (
                     <Pagination page={currentPaidPage} totalPages={totalPaidPages} onChange={setPaidPage} />
@@ -434,7 +471,7 @@ function ModeBadge({ mode }: { mode: number }) {
   )
 }
 
-function CreatedBillRow({ bill, progress }: { bill: CreatedBill; progress: BillProgress | undefined }) {
+function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progress: BillProgress | undefined; titleMap: Record<string, string> }) {
   const router = useRouter()
   const href = `/bill/${bill.billId.toString()}`
 
@@ -461,7 +498,7 @@ function CreatedBillRow({ bill, progress }: { bill: CreatedBill; progress: BillP
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
-        <span style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600 }}>{getBillTitle(bill.billId)}</span>
+        <span style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600 }}>{getBillTitleFromMap(bill.billId, titleMap)}</span>
         <span style={{ color: colors.textMuted, fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
           #{bill.billId.toString()}
         </span>
@@ -504,7 +541,7 @@ function CreatedBillRow({ bill, progress }: { bill: CreatedBill; progress: BillP
   )
 }
 
-function PaymentRow({ payment }: { payment: PaymentMade }) {
+function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Record<string, string> }) {
   const router = useRouter()
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [method, setMethod] = useState<'direct' | 'crosschain' | null>(null)
@@ -550,7 +587,7 @@ function PaymentRow({ payment }: { payment: PaymentMade }) {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
-        <span style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600 }}>{getBillTitle(payment.billId)}</span>
+        <span style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600 }}>{getBillTitleFromMap(payment.billId, titleMap)}</span>
         <span style={{ color: colors.textMuted, fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
           #{payment.billId.toString()}
         </span>

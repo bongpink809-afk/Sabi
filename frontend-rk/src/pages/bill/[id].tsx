@@ -13,6 +13,7 @@ import { arcTestnet } from '../../wagmi'
 import { useCrossChainPayment } from '../../hooks/useCrossChainPayment'
 import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
+import { useBillSync, saveSingleShareName, saveSlotContributorName } from '../../hooks/useFirebaseSync'
 
 // Tên người tham gia chỉ lưu ở frontend (contract không lưu tên, chỉ lưu amount)
 // → đọc từ localStorage theo billId, set lúc tạo bill ở create.tsx
@@ -194,13 +195,34 @@ const BillDetail: NextPage = () => {
     }
   }
 
+  // ─── Firebase Firestore realtime sync ─────────────────────────────────────
+  // Khi thiết bị khác (PC/Phone) ghi tên bill hoặc tên share lên Firestore,
+  // hook này tự cập nhật localStorage + setState → UI render lại ngay.
+  useBillSync(billId !== undefined ? billId.toString() : undefined, (data) => {
+    if (data.title) {
+      setBillTitle(data.title)
+    }
+    if (data.shareNames) {
+      // Firestore lưu key string ("0","1"), shareNames state dùng number key
+      const parsed: LocalShareNames = {}
+      Object.entries(data.shareNames).forEach(([k, v]) => { parsed[Number(k)] = v })
+      setShareNames((prev) => ({ ...prev, ...parsed }))
+    }
+    if (data.slotNames) {
+      setSlotNames((prev) => ({ ...prev, ...data.slotNames }))
+    }
+  })
+
   // Cho phép người xem tự đặt tên nếu creator chưa đặt lúc tạo bill —
-  // lưu local trên máy người đó (mỗi người xem trang này lưu riêng, không đồng bộ nhau)
+  // ghi vào cả localStorage lẫn Firestore để thiết bị khác thấy được ngay
   const updateShareName = (shareId: number, name: string) => {
     if (billId === undefined) return
     const next = { ...shareNames, [shareId]: name }
     setShareNames(next)
+    // localStorage (local, instant)
     localStorage.setItem(`sabi-bill-${billId.toString()}-names`, JSON.stringify(next))
+    // Firebase Firestore (sync đến mọi thiết bị đang xem bill này)
+    saveSingleShareName(billId.toString(), shareId, name, shareNames)
   }
 
   // ─── Đọc thông tin bill ───────────────────────────────────────────────────
@@ -215,7 +237,11 @@ const BillDetail: NextPage = () => {
     functionName: 'getBill',
     args: billId !== undefined ? [billId] : undefined,
     chainId: arcTestnet.id,
-    query: { enabled: billId !== undefined },
+    query: {
+      enabled: billId !== undefined,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+    },
   })
 
   // bill.mode: 0 = ASSIGNED, 1 = OPEN_SLOT (theo enum BillMode trong SabiBill.sol)
@@ -228,7 +254,11 @@ const BillDetail: NextPage = () => {
     functionName: 'shareCount',
     args: billId !== undefined ? [billId] : undefined,
     chainId: arcTestnet.id,
-    query: { enabled: billId !== undefined && mode === 'ASSIGNED' },
+    query: {
+      enabled: billId !== undefined && mode === 'ASSIGNED',
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+    },
   })
 
   // ─── Đọc tên người tham gia + hash đã trả trước đó, lưu local lúc tạo/trả bill ──
@@ -287,7 +317,11 @@ const BillDetail: NextPage = () => {
     functionName: 'allowance',
     args: connectedAddress ? [connectedAddress, SABI_BILL_ADDRESS] : undefined,
     chainId: arcTestnet.id,
-    query: { enabled: !!connectedAddress },
+    query: {
+      enabled: !!connectedAddress,
+      refetchOnWindowFocus: false,
+      staleTime: 15_000,
+    },
   })
 
   const { writeContract: approve, data: approveTx, isPending: isApproving, error: approveError, reset: resetApprove } = useWriteContract()
@@ -316,16 +350,19 @@ const BillDetail: NextPage = () => {
     if (approveError) resetApprove()
   }, [approveError, resetApprove])
 
-  // Approve số lớn (max uint256) 1 lần — khỏi phải approve lại mỗi lần trả tiền
-    const handleApprove = async () => {
+  // Approve đúng số tiền cần trả — MetaMask sẽ hiện đúng số thay vì
+  // "115792089..." khi dùng maxUint256. Mỗi lần approve cho 1 giao dịch cụ thể.
+  const handleApprove = async (amountToApprove?: bigint) => {
     if (currentChainId !== arcTestnet.id) {
       await switchChainAsync({ chainId: arcTestnet.id })
     }
+    // Fallback: nếu không có amount cụ thể thì approve tổng bill (vẫn hợp lý)
+    const amount = amountToApprove ?? (bill?.totalAmount ?? 2n ** 128n)
     approve({
       address: ARC_USDC_ADDRESS,
       abi: ERC20_ABI,
       functionName: 'approve',
-      args: [SABI_BILL_ADDRESS, 2n ** 256n - 1n],
+      args: [SABI_BILL_ADDRESS, amount],
       chainId: arcTestnet.id,
     })
   }
@@ -352,13 +389,14 @@ const BillDetail: NextPage = () => {
     hash: paySlotTx,
   })
 
-  // Lưu tên người góp theo txHash — dùng chung cho cả trả trực tiếp (paySlotTx)
-  // lẫn trả cross-chain (relayTxHash), tránh lặp lại logic ghi localStorage 2 nơi
+  // Lưu tên người góp theo txHash — ghi localStorage (instant) + Firestore (sync)
   const saveSlotName = (txHash: `0x${string}`, name: string) => {
     if (!name.trim() || billId === undefined) return
     const next = { ...slotNames, [txHash]: name.trim() }
     setSlotNames(next)
     localStorage.setItem(`sabi-bill-${billId.toString()}-slotnames`, JSON.stringify(next))
+    // Firebase Firestore — tất cả thiết bị đang xem bill này thấy tên ngay
+    saveSlotContributorName(billId.toString(), txHash, name.trim(), slotNames)
   }
 
   useEffect(() => {
@@ -450,13 +488,10 @@ const BillDetail: NextPage = () => {
 
       <main style={{ padding: '24px 16px 40px' }}>
         <div
+          className="sabi-grid-detail"
           style={{
             maxWidth: 1080,
             margin: '0 auto',
-            display: 'grid',
-            gridTemplateColumns: '400px 1fr',
-            gap: 30,
-            alignItems: 'start',
           }}
         >
           <ReceiptCard
@@ -865,7 +900,7 @@ function AssignedShares({
   paidTxHashes: Record<number, `0x${string}`>
   onUpdateName: (shareId: number, name: string) => void
   hasAllowance: (amountNeeded: bigint) => boolean
-  onApprove: () => void
+  onApprove: (amount?: bigint) => void
   onCancelApprove: () => void
   isApproving: boolean
   isWalletConnected: boolean
@@ -888,7 +923,11 @@ function AssignedShares({
       chainId: arcTestnet.id,
       args: [billId, BigInt(shareId)] as const,
     })),
-    query: { enabled: shareCount > 0 },
+    query: {
+      enabled: shareCount > 0,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+    },
   })
 
   // Phân trang danh sách share — 10 phần/trang, quá 10 chuyển trang, giống
@@ -1012,7 +1051,7 @@ function ShareRow({
   onPayDirect: (shareId: number) => void
   isPaying: boolean
   hasAllowance: (amountNeeded: bigint) => boolean
-  onApprove: () => void
+  onApprove: (amount?: bigint) => void
   onCancelApprove: () => void
   isApproving: boolean
   isWalletConnected: boolean
@@ -1023,7 +1062,18 @@ function ShareRow({
   onShareLoaded: (shareId: number, paid: boolean, amount: bigint) => void
   onCrossChainSuccess: () => void
 }) {
+  // Auto-fill tên từ profile name nếu người dùng đã đặt tên hồ sơ
+  // — tránh phải nhập tên lại mỗi lần trả bill
+  const { address: currentAddress } = useAccount()
   const [nameDraft, setNameDraft] = useState('')
+  useEffect(() => {
+    if (!currentAddress) return
+    // Chỉ auto-fill nếu ô tên vẫn còn trống — không ghi đè tên đã gõ
+    setNameDraft((prev) => {
+      if (prev) return prev
+      return localStorage.getItem(`sabi-profile-name-${currentAddress.toLowerCase()}`) ?? ''
+    })
+  }, [currentAddress])
 
   // Mỗi ShareRow tự quản lý trạng thái cross-chain của CHÍNH NÓ — độc lập hoàn toàn với share khác
   const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay, isDelayed: ccIsDelayed } = useCrossChainPayment(billId, shareId)
@@ -1129,7 +1179,7 @@ function ShareRow({
             <input
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
-              placeholder={`Phần #${shareId + 1} — nhập tên của bạn`}
+              placeholder="Tên (tuỳ chọn)"
               style={{
                 fontSize: 13,
                 padding: '6px 10px',
@@ -1209,7 +1259,7 @@ function ShareRow({
           </div>
         ) : needsApprove ? (
           <button
-            onClick={onApprove}
+            onClick={() => onApprove(share?.amount)}
             disabled={isApproving}
             style={{
               fontSize: 13,
@@ -1289,7 +1339,7 @@ function OpenSlotInfo({
   onPayDirect: () => void
   isPaying: boolean
   hasAllowance: boolean
-  onApprove: () => void
+  onApprove: (amount?: bigint) => void
   isApproving: boolean
   isWalletConnected: boolean
   payTxHash: `0x${string}` | undefined
@@ -1392,7 +1442,7 @@ function OpenSlotInfo({
       {needsApprove ? (
         <>
           <button
-            onClick={onApprove}
+            onClick={() => onApprove(amountPerSlot)}
             disabled={isApproving}
             style={{
               width: '100%',
@@ -1414,23 +1464,46 @@ function OpenSlotInfo({
         </>
       ) : (
           isWalletConnected && (
-            <button
-              onClick={handleClickPay}
-              disabled={isPaying || isCrossChainBusy}
-              style={{
-                width: '100%',
-                fontSize: 14,
-                fontWeight: 600,
-                color: '#fff',
-                background: isPaying || isCrossChainBusy ? colors.textMuted : colors.buttonPrimary,
-                border: 'none',
-                borderRadius: radius.button,
-                padding: '12px',
-                cursor: isPaying || isCrossChainBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {isCrossChainBusy ? 'Đang xử lý...' : isPaying ? 'Đang xử lý...' : `Góp ${amount} USDC`}
-            </button>
+            <>
+              <button
+                onClick={handleClickPay}
+                disabled={isPaying || isCrossChainBusy}
+                style={{
+                  width: '100%',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: '#fff',
+                  background: isPaying || isCrossChainBusy ? colors.textMuted : colors.buttonPrimary,
+                  border: 'none',
+                  borderRadius: radius.button,
+                  padding: '12px',
+                  cursor: isPaying || isCrossChainBusy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isCrossChainBusy ? 'Đang xử lý...' : isPaying ? 'Đang xử lý...' : `Góp ${amount} USDC`}
+              </button>
+              {/* Nút Huỷ — chỉ hiện khi đang chờ ký burn (state burning), cho phép
+                  user thoát khỏi trạng thái kẹt khi mobile wallet đóng popup không trả error */}
+              {ccState.status === 'burning' && (
+                <button
+                  onClick={resetCrossChainPay}
+                  style={{
+                    width: '100%',
+                    marginTop: 6,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: colors.textSecondary,
+                    background: 'none',
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: radius.button,
+                    padding: '10px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Huỷ giao dịch
+                </button>
+              )}
+            </>
           )
         )}
 

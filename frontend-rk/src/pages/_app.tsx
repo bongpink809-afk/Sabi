@@ -15,7 +15,21 @@ import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 
 import { config } from '../wagmi';
 
-const client = new QueryClient();
+// QueryClient với defaultOptions đã tắt refetchOnWindowFocus và gcTime ngắn —
+// ngăn wagmi/react-query tự refetch định kỳ gây layout jump trên mobile mỗi ~1 phút.
+// staleTime: 20s — data cũ sau 20s mới tự fetch lại khi cần,
+// không fetch liên tục khi user ẩn/hiện tab hay switch app trên điện thoại.
+const client = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      staleTime: 20_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+    },
+  },
+})
 
 function MyApp({ Component, pageProps }: AppProps) {
   return (
