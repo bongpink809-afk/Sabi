@@ -1,3 +1,4 @@
+import { useTranslation } from 'next-i18next'
 import { CrossChainState } from '../hooks/useCrossChainPayment'
 import { colors, radius } from '../styles/theme'
 
@@ -8,8 +9,8 @@ const SOURCE_CHAIN_DISPLAY = {
   ethereum: { name: 'Ethereum Sepolia', explorerBase: 'https://sepolia.etherscan.io/tx/' },
 } as const
 
-function getChainDisplay(sourceChain: CrossChainState['sourceChain']) {
-  return sourceChain ? SOURCE_CHAIN_DISPLAY[sourceChain] : { name: 'chain nguồn', explorerBase: '#' }
+function getChainDisplay(sourceChain: CrossChainState['sourceChain'], t: (key: string) => string) {
+  return sourceChain ? SOURCE_CHAIN_DISPLAY[sourceChain] : { name: t('crosschain.default_chain_name'), explorerBase: '#' }
 }
 
 // Faucet gas ETH testnet riêng từng chain nguồn — balance check ("insufficient_balance")
@@ -35,13 +36,14 @@ export function CrossChainStatusPanel({
     contributorName?: string
     isDelayed?: boolean
   }) {
-  const chainDisplay = getChainDisplay(state.sourceChain)
+  const { t } = useTranslation('common')
+  const chainDisplay = getChainDisplay(state.sourceChain, t)
 
   if (state.status === 'checking_balance' || state.status === 'burning') {
     return (
       <Panel>
         <p style={{ color: colors.textSecondary, fontSize: 13 }}>
-          {state.status === 'checking_balance' ? 'Đang kiểm tra số dư...' : 'Đang chờ ký giao dịch burn trong ví...'}
+          {state.status === 'checking_balance' ? t('crosschain.checking_balance') : t('crosschain.burning')}
         </p>
       </Panel>
     )
@@ -52,13 +54,13 @@ export function CrossChainStatusPanel({
     return (
       <Panel>
         <p style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
-          ⏳ Đang xử lý...{contributorName && ` — ${contributorName}`}
+          {t('crosschain.processing')}{contributorName && ` — ${contributorName}`}
         </p>
         <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8 }}>
-          Burn tx đã xác nhận trên {chainDisplay.name}.
+          {t('crosschain.burn_confirmed', { chain: chainDisplay.name })}
         </p>
         {state.burnTxHash && (
-          
+
 <a
             href={`${chainDisplay.explorerBase}${state.burnTxHash}`}
             target="_blank"
@@ -72,7 +74,7 @@ export function CrossChainStatusPanel({
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
             }}
           >
-            Xem tx burn: {state.burnTxHash.slice(0, 10)}...{state.burnTxHash.slice(-8)}
+            {t('crosschain.view_burn_tx', { hash: `${state.burnTxHash.slice(0, 10)}...${state.burnTxHash.slice(-8)}` })}
           </a>
         )}
         {/* relaying = ví đang bật popup: switch mạng sang Arc + ký payCrossChain.
@@ -80,24 +82,23 @@ export function CrossChainStatusPanel({
         {state.status === 'relaying' ? (
           <>
             <p style={{ color: colors.textPrimary, fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-              ✍️ Mở ví và ký giao dịch để nhận tiền trên Arc
+              {t('crosschain.relaying_title')}
             </p>
             <p style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 4 }}>
-              Circle đã xác nhận xong. Đây là bước cuối: ví sẽ hỏi chuyển mạng sang Arc Testnet,
-              rồi ký 1 giao dịch để ghi nhận tiền vào bill — không ký thì tiền chưa tới nơi.
+              {t('crosschain.relaying_desc')}
             </p>
           </>
         ) : isDelayed ? (
           <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
-            Đang xử lý lâu hơn bình thường — tiền không mất, hệ thống vẫn đang chờ Circle xác nhận.
+            {t('crosschain.delayed_note')}
           </p>
         ) : (
           <p style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4 }}>
-            Đang chờ Circle ký attestation ("thường 8–20 giây").
+            {t('crosschain.waiting_attestation')}
           </p>
         )}
         <p style={{ color: colors.textMuted, fontSize: 12 }}>
-          Tiền không mất — có thể đóng tab và quay lại sau, hệ thống sẽ tự tiếp tục.
+          {t('crosschain.no_loss_note')}
         </p>
       </Panel>
     )
@@ -110,10 +111,10 @@ export function CrossChainStatusPanel({
     return (
       <Panel>
         <p style={{ color: colors.success, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
-          ✅ USDC đã tới Arc{contributorName && ` — ${contributorName}`}
+          {t('crosschain.success_title')}{contributorName && ` — ${contributorName}`}
         </p>
         {state.relayTxHash && (
-<a          
+<a
             href={`https://testnet.arcscan.app/tx/${state.relayTxHash}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -126,21 +127,21 @@ export function CrossChainStatusPanel({
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
             }}
           >
-            Xem tx trên Arc: {state.relayTxHash.slice(0, 10)}...{state.relayTxHash.slice(-8)}
+            {t('crosschain.view_arc_tx', { hash: `${state.relayTxHash.slice(0, 10)}...${state.relayTxHash.slice(-8)}` })}
           </a>
         )}
         <p style={{ color: colors.textSecondary, fontSize: 13 }}>
-          Đang cập nhật danh sách người góp...
+          {t('crosschain.updating_list')}
         </p>
       </Panel>
     )
   }
   // ─── Success: lấp gap giữa "relay xong" và "danh sách hiện dòng mới" ──────
   // Không có panel này thì relay xong panel biến mất ngay, nhưng danh sách
-  
+
   // ─── D2 — Error, 4 case ──────────────────────────────────────────────────
   if (state.status === 'error') {
-    const { title, description, showRetry } = getErrorContent(state, chainDisplay.name)
+    const { title, description, showRetry } = getErrorContent(state, chainDisplay.name, t)
     return (
       <Panel isError>
         <p style={{ color: colors.danger, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{title}</p>
@@ -159,7 +160,7 @@ export function CrossChainStatusPanel({
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
             }}
           >
-            Mã tx burn (giữ lại để đối chiếu): {state.burnTxHash}
+            {t('crosschain.burn_tx_keep', { hash: state.burnTxHash })}
           </a>
         )}
         {state.errorType === 'insufficient_balance' && (
@@ -170,7 +171,7 @@ export function CrossChainStatusPanel({
               rel="noopener noreferrer"
               style={{ display: 'inline-block', marginRight: 12, color: colors.primary, fontSize: 12, fontWeight: 600, textDecoration: 'underline' }}
             >
-              Lấy USDC test ↗
+              {t('crosschain.get_test_usdc')}
             </a>
             {state.sourceChain && (
               <a
@@ -179,22 +180,22 @@ export function CrossChainStatusPanel({
                 rel="noopener noreferrer"
                 style={{ display: 'inline-block', color: colors.primary, fontSize: 12, fontWeight: 600, textDecoration: 'underline' }}
               >
-                Lấy {chainDisplay.name} ETH test ↗
+                {t('crosschain.get_test_eth', { chain: chainDisplay.name })}
               </a>
             )}
             <p style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-              Faucet Circle giới hạn ~20 USDC / 2 giờ / địa chỉ / chain — nếu vừa lấy rồi thì đợi một lúc, không phải faucet hỏng.
+              {t('crosschain.faucet_limit_note')}
             </p>
           </div>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
           {showRetry && (
             <button onClick={onRetry} style={buttonStyle(colors.buttonPrimary)}>
-              Thử lại
+              {t('crosschain.retry')}
             </button>
           )}
           <button onClick={onDismiss} style={buttonStyle(colors.textMuted)}>
-            Đóng
+            {t('crosschain.dismiss')}
           </button>
         </div>
       </Panel>
@@ -204,30 +205,30 @@ export function CrossChainStatusPanel({
   return null
 }
 
-function getErrorContent(state: CrossChainState, chainName: string) {
+function getErrorContent(state: CrossChainState, chainName: string, t: (key: string, options?: Record<string, unknown>) => string) {
   switch (state.errorType) {
     case 'insufficient_balance':
       return {
-        title: 'Số dư không đủ',
-        description: state.errorMessage ?? `Số dư USDC trên ${chainName} không đủ để trả.`,
+        title: t('crosschain.errors.insufficient_balance_title'),
+        description: state.errorMessage ?? t('crosschain.errors.insufficient_balance_desc', { chain: chainName }),
         showRetry: true,
       }
     case 'user_rejected':
       return {
-        title: 'Đã huỷ giao dịch',
-        description: 'Bạn đã từ chối ký trong ví. Không có gì bị mất, thử lại khi sẵn sàng.',
+        title: t('crosschain.errors.user_rejected_title'),
+        description: t('crosschain.errors.user_rejected_desc'),
         showRetry: true,
       }
     case 'burn_reverted':
       return {
-        title: 'Giao dịch burn thất bại',
-        description: state.errorMessage ?? `Giao dịch trên ${chainName} bị revert.`,
+        title: t('crosschain.errors.burn_reverted_title'),
+        description: state.errorMessage ?? t('crosschain.errors.burn_reverted_desc', { chain: chainName }),
         showRetry: true,
       }
     case 'relay_failed':
       return {
-        title: 'Không hoàn tất được — cần hỗ trợ',
-        description: `Tiền đã burn thành công trên ${chainName} nhưng chưa ghi nhận được trên Arc. Giữ lại mã tx bên dưới, liên hệ hỗ trợ để xử lý thủ công.`,
+        title: t('crosschain.errors.relay_failed_title'),
+        description: t('crosschain.errors.relay_failed_desc', { chain: chainName }),
         showRetry: false,
       }
     // Chờ lâu bất thường (>30 phút), KHÔNG phải burn thất bại hay lỗi mạng — tiền
@@ -235,16 +236,14 @@ function getErrorContent(state: CrossChainState, chainName: string) {
     // Không cho "Thử lại" vì sẽ burn lần 2, mất tiền oan — chỉ có thể chờ tiếp.
     case 'attestation_delayed':
       return {
-        title: 'Vẫn đang chờ xử lý',
-        description:
-          state.errorMessage ??
-          `Tiền đã burn thành công trên ${chainName}, không mất. Circle đang xử lý lâu hơn bình thường — đóng tab và quay lại sau, hệ thống sẽ tự tiếp tục kiểm tra.`,
+        title: t('crosschain.errors.attestation_delayed_title'),
+        description: state.errorMessage ?? t('crosschain.errors.attestation_delayed_desc', { chain: chainName }),
         showRetry: false,
       }
     default:
       return {
-        title: 'Có lỗi xảy ra',
-        description: state.errorMessage ?? 'Lỗi không xác định.',
+        title: t('crosschain.errors.default_title'),
+        description: state.errorMessage ?? t('crosschain.errors.default_desc'),
         showRetry: true,
       }
   }

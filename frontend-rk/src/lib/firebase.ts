@@ -195,6 +195,34 @@ export async function uploadAvatar(
 }
 
 /**
+ * Batch fetch hồ sơ (profileName, avatarUrl) của nhiều địa chỉ ví cùng lúc —
+ * dùng để hiện avatar/tên của người trả trong hoá đơn (khác ví đang connect,
+ * nên không dùng listenToUserProfile — hook đó chỉ realtime cho 1 ví).
+ */
+export async function fetchUserProfiles(
+  addresses: string[]
+): Promise<Record<string, UserFirestoreData>> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return {}
+  try {
+    const db = getDb()
+    const results: Record<string, UserFirestoreData> = {}
+    const uniqueAddresses = Array.from(new Set(addresses.map((a) => a.toLowerCase())))
+    await Promise.all(
+      uniqueAddresses.map(async (addr) => {
+        const snap = await getDoc(doc(db, 'users', addr))
+        if (snap.exists()) {
+          results[addr] = snap.data() as UserFirestoreData
+        }
+      })
+    )
+    return results
+  } catch (err) {
+    console.warn('[Firebase] fetchUserProfiles failed:', err)
+    return {}
+  }
+}
+
+/**
  * Lưu/merge hồ sơ user (profileName, avatarUrl) lên Firestore theo địa chỉ ví.
  */
 export async function updateUserProfile(

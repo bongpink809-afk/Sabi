@@ -1,8 +1,10 @@
 import { arcTestnet } from '../wagmi'
-import type { NextPage } from 'next'
+import type { NextPage, GetServerSideProps } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'next-i18next'
+import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
 import { parseUnits, parseEventLogs } from 'viem'
 import { baseSepolia, arbitrumSepolia } from 'wagmi/chains'
@@ -14,6 +16,10 @@ import { saveBillTitle, saveBillShareNames } from '../hooks/useFirebaseSync'
 
 import { SabiHeader } from '../components/SabiHeader'
 import { SabiLogo } from '../components/SabiLogo'
+
+export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
+  props: { ...(await serverSideTranslations(locale ?? 'en', ['common'])) },
+})
 
 type BillMode = 'ASSIGNED' | 'OPEN_SLOT'
 
@@ -30,6 +36,7 @@ interface ShareRow {
 // vừa tạo xuất hiện ngay trong danh sách "Bill đã tạo".
 const Home: NextPage = () => {
   const router = useRouter()
+  const { t } = useTranslation('common')
   const { isConnected } = useAccount()
   const [mode, setMode] = useState<BillMode>('ASSIGNED')
   const [billName, setBillName] = useState('')
@@ -61,7 +68,13 @@ const Home: NextPage = () => {
   const amountPerSlotComputed = numSlotsInt > 0 ? totalOpenValue / numSlotsInt : 0
 
   const { writeContract, data: txHash, isPending } = useWriteContract()
-  const { data: receipt, isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash })
+  // chainId cố định Arc — không mặc định theo chain ví đang báo cáo (có thể
+  // chưa cập nhật đúng ngay sau khi switch), tránh hook đợi receipt sai chain
+  // dù tx đã confirm thật trên Arc.
+  const { data: receipt, isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash: txHash,
+    chainId: arcTestnet.id,
+  })
 
   // Sau khi tx confirm, đọc billId thật từ event BillCreated trong log
   // (billId không có sẵn trong response tx — phải giải mã log mới lấy được)
@@ -138,7 +151,7 @@ const Home: NextPage = () => {
     } catch (err: any) {
       // User từ chối hoặc ví không phản hồi — hiện thông báo hướng dẫn
       if (!err?.message?.includes('rejected')) {
-        setSwitchError('Mở app ví và xác nhận đổi sang Arc Testnet')
+        setSwitchError(t('create.switch_network_error'))
         setTimeout(() => setSwitchError(null), 5000)
       }
     }
@@ -152,7 +165,7 @@ const Home: NextPage = () => {
       try {
         await switchChainAsync({ chainId: arcTestnet.id })
       } catch {
-        setSwitchError('Mở app ví và xác nhận đổi sang Arc Testnet')
+        setSwitchError(t('create.switch_network_error'))
         setTimeout(() => setSwitchError(null), 5000)
         return
       }
@@ -191,7 +204,7 @@ const Home: NextPage = () => {
 
   return (
     <div style={wrap}>
-      <Head><title>Tạo bill — Sabi</title></Head>
+      <Head><title>{t('create.page_title')}</title></Head>
       <SabiHeader />
       <div
         className="sabi-grid-create"
@@ -206,50 +219,50 @@ const Home: NextPage = () => {
             <ModeCard
               mode="assigned"
               tag="ASSIGNED"
-              title="Chia theo danh sách"
-              description="Đặt tên và số tiền cho từng phần. Ai cũng trả được phần bất kỳ, trạng thái tick theo từng tên."
+              title={t('create.mode_assigned_title')}
+              description={t('create.mode_assigned_desc')}
               selected={mode === 'ASSIGNED'}
               onClick={() => setMode('ASSIGNED')}
             />
             <ModeCard
               mode="openslot"
               tag="OPEN-SLOT"
-              title="Chia đều"
-              description="Tổng tiền chia đều cho số người"
+              title={t('create.mode_openslot_title')}
+              description={t('create.mode_openslot_desc')}
               selected={mode === 'OPEN_SLOT'}
               onClick={() => setMode('OPEN_SLOT')}
             />
           </div>
 
-          <label style={lbl}>Tên bill</label>
-          <input style={input} placeholder="Lẩu tối thứ 6" value={billName} onChange={e => setBillName(capitalizeFirst(e.target.value))} />
+          <label style={lbl}>{t('create.bill_name_label')}</label>
+          <input style={input} placeholder={t('create.bill_name_placeholder')} value={billName} onChange={e => setBillName(capitalizeFirst(e.target.value))} />
 
           {mode === 'ASSIGNED' ? (
             <>
-              <label style={lbl}>Người tham gia & số tiền</label>
+              <label style={lbl}>{t('create.participants_label')}</label>
               {shares.map((s, i) => (
                 <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-                  <input style={{ ...input, flex: 1, marginBottom: 0 }} placeholder="Tên" value={s.name} onChange={e => updateShare(i, 'name', capitalizeFirst(e.target.value))} />
+                  <input style={{ ...input, flex: 1, marginBottom: 0 }} placeholder={t('create.name_placeholder')} value={s.name} onChange={e => updateShare(i, 'name', capitalizeFirst(e.target.value))} />
                   <input style={{ ...amountInput, flex: 1, marginBottom: 0 }} placeholder="0.00" type="number" min="0" value={s.amount} onChange={e => updateShare(i, 'amount', e.target.value)} />
                   {shares.length > 1 && <button onClick={() => removeShare(i)} style={rmBtn}>✕</button>}
                 </div>
               ))}
-              <button onClick={addShare} style={addRowBtn}>+ Thêm người</button>
-              <TotalLine label="Tổng bill (tự cộng)" value={`${totalAssigned.toFixed(2)} USDC`} />
+              <button onClick={addShare} style={addRowBtn}>{t('create.add_person')}</button>
+              <TotalLine label={t('create.total_bill_label')} value={`${totalAssigned.toFixed(2)} USDC`} />
             </>
           ) : (
             <>
               <div style={{ display: 'flex', gap: 12 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={lbl}>Tổng tiền (USDC)</label>
-                  <input style={amountInput} placeholder="VD: 40" type="number" min="0" value={totalOpenInput} onChange={e => setTotalOpenInput(e.target.value)} />
+                  <label style={lbl}>{t('create.total_amount_label')}</label>
+                  <input style={amountInput} placeholder={t('create.total_amount_placeholder')} type="number" min="0" value={totalOpenInput} onChange={e => setTotalOpenInput(e.target.value)} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={lbl}>Số người</label>
-                  <input style={amountInput} placeholder="VD: 4" type="number" min="1" value={numSlots} onChange={e => setNumSlots(e.target.value)} />
+                  <label style={lbl}>{t('create.num_people_label')}</label>
+                  <input style={amountInput} placeholder={t('create.num_people_placeholder')} type="number" min="1" value={numSlots} onChange={e => setNumSlots(e.target.value)} />
                 </div>
               </div>
-              {numSlotsInt > 0 && <TotalLine label="Mỗi người góp (tổng ÷ N)" value={`${amountPerSlotComputed.toFixed(2)} USDC`} />}
+              {numSlotsInt > 0 && <TotalLine label={t('create.per_person_label')} value={`${amountPerSlotComputed.toFixed(2)} USDC`} />}
             </>
           )}
 
@@ -260,7 +273,7 @@ const Home: NextPage = () => {
               disabled={isSwitching}
               style={{ ...primaryBtn, marginTop: 16, width: '100%', background: isSwitching ? colors.textMuted : '#e07c00' }}
             >
-              {isSwitching ? 'Đang đổi mạng...' : '⚡ Bấm đây để đổi sang Arc Testnet'}
+              {isSwitching ? t('create.switching_network') : t('create.switch_to_arc_button')}
             </button>
           )}
 
@@ -272,18 +285,18 @@ const Home: NextPage = () => {
               disabled={!isConnected || isPending || isConfirming || isSwitching || formIncomplete}
             >
               {!isConnected
-                ? 'Kết nối ví để tạo bill'
+                ? t('create.connect_wallet_button')
                 : isSwitching
-                ? 'Đang đổi sang Arc...'
+                ? t('create.switching_to_arc')
                 : needsSwitchToArc
-                ? '⚡ Chuyển sang Arc & tạo bill'
+                ? t('create.switch_and_create')
                 : isPending
-                ? 'Đang xác nhận trong ví...'
+                ? t('create.confirming_wallet')
                 : isConfirming
-                ? 'Đang tạo bill...'
+                ? t('create.creating_bill')
                 : isSuccess
-                ? 'Đang chuyển trang...'
-                : 'Tạo bill'}
+                ? t('create.redirecting')
+                : t('create.create_button')}
             </button>
           )}
 
@@ -293,7 +306,7 @@ const Home: NextPage = () => {
             </p>
           )}
           <p style={{ fontSize: 12, color: colors.textPrimary, fontFamily: 'sans-serif', marginTop: 10, textAlign: 'center' }}>
-            <span style={{ color: colors.primary }}>⚠</span> Không thể chỉnh sửa sau khi tạo.
+            <span style={{ color: colors.primary }}>⚠</span> {t('create.no_edit_warning')}
           </p>
         </div>
 
@@ -332,10 +345,11 @@ function ReceiptPreview({
   numSlots: string
   total: number
 }) {
+  const { t } = useTranslation('common')
   const rows =
     mode === 'ASSIGNED'
       ? shares.map((s) => ({ name: s.name.trim() || '—', amount: parseFloat(s.amount) || 0 }))
-      : [{ name: `Mỗi slot (0/${numSlots || '—'})`, amount: amountPerSlot }]
+      : [{ name: t('create.per_slot_row', { filled: 0, total: numSlots || '—' }), amount: amountPerSlot }]
 
   return (
     <div className="receipt">
@@ -361,7 +375,7 @@ function ReceiptPreview({
 
       <ReceiptDash />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0 2px' }}>
-        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 1, color: colors.paperInk }}>TỔNG</span>
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 1, color: colors.paperInk }}>{t('receipt.total')}</span>
         <span style={{ fontSize: 22, fontWeight: 700, color: colors.paperInk }}>
           {total.toFixed(2)} <small style={{ fontSize: 11, color: colors.paperMuted, fontWeight: 500 }}>USDC</small>
         </span>

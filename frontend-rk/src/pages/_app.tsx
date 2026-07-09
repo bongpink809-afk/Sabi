@@ -9,11 +9,13 @@ import '../styles/globals.css';
 import '@rainbow-me/rainbowkit/styles.css';
 import type { AppProps } from 'next/app';
 
+import { useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { WagmiProvider } from 'wagmi';
+import { WagmiProvider, useAccount, useSwitchChain } from 'wagmi';
 import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
+import { appWithTranslation } from 'next-i18next';
 
-import { config } from '../wagmi';
+import { config, arcTestnet } from '../wagmi';
 
 // QueryClient với defaultOptions đã tắt refetchOnWindowFocus và gcTime ngắn —
 // ngăn wagmi/react-query tự refetch định kỳ gây layout jump trên mobile mỗi ~1 phút.
@@ -31,11 +33,33 @@ const client = new QueryClient({
   },
 })
 
+// Tự chuyển sang Arc Testnet ngay khi vừa kết nối ví — chỉ bắn 1 lần đúng lúc
+// chuyển từ "chưa kết nối" sang "đã kết nối" (theo dõi bằng ref `wasConnected`),
+// KHÔNG chạy lại mỗi khi chainId đổi giữa phiên. Nếu bắn lại liên tục sẽ đánh
+// nhau với các chỗ chủ động switch sang chain khác giữa phiên (vd trả cross-chain
+// cần switch sang Base/Arbitrum để ký rồi switch về) — chain đó sẽ bị kéo về
+// Arc ngay lập tức, phá luồng ký giao dịch.
+function AutoSwitchToArc() {
+  const { isConnected, chainId } = useAccount()
+  const { switchChain } = useSwitchChain()
+  const wasConnected = useRef(false)
+
+  useEffect(() => {
+    if (isConnected && !wasConnected.current && chainId !== arcTestnet.id) {
+      switchChain({ chainId: arcTestnet.id })
+    }
+    wasConnected.current = isConnected
+  }, [isConnected, chainId, switchChain])
+
+  return null
+}
+
 function MyApp({ Component, pageProps }: AppProps) {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={client}>
         <RainbowKitProvider>
+          <AutoSwitchToArc />
           <Component {...pageProps} />
         </RainbowKitProvider>
       </QueryClientProvider>
@@ -43,4 +67,4 @@ function MyApp({ Component, pageProps }: AppProps) {
   );
 }
 
-export default MyApp;
+export default appWithTranslation(MyApp);

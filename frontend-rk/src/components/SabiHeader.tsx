@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'next-i18next'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { colors } from '../styles/theme'
 import { SabiLogo } from './SabiLogo'
@@ -29,6 +30,7 @@ export function rememberLastBillId(billId: string) {
 // như bản demo tĩnh, mỗi bill vẫn có URL riêng để share.
 export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
   const router = useRouter()
+  const { t } = useTranslation('common')
   const [lastBillId, setLastBillId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
 
   const billTabId = currentBillId ?? lastBillId
   const billTabHref = billTabId ? `/bill/${billTabId}` : '/bill'
-  const billTabLabel = billTabId ? `Chi tiết bill #${billTabId}` : 'Chi tiết bill'
+  const billTabLabel = billTabId ? t('nav.bill_detail_id', { id: billTabId }) : t('nav.bill_detail')
 
   const isHome = router.pathname === '/'
   const isBillDetail = router.pathname === '/bill/[id]' || router.pathname === '/bill'
@@ -62,11 +64,19 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
             gap: 10,
           }}
         >
-          <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
-            <SabiLogo size={34} />
-            <strong style={{ fontSize: 20, fontWeight: 800, color: colors.textPrimary }}>Sabi</strong>
-          </Link>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="sabi-header-brand" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
+              <SabiLogo size={34} />
+              <strong style={{ fontSize: 20, fontWeight: 800, color: colors.textPrimary }}>Sabi</strong>
+            </Link>
+            <div className="sabi-locale-mobile">
+              <LocaleSwitcher />
+            </div>
+          </div>
+          <div className="sabi-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="sabi-locale-desktop">
+              <LocaleSwitcher />
+            </div>
             <FaucetMenu />
             <ConnectButton />
           </div>
@@ -88,16 +98,127 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
           }}
         >
           <Tab href="/" active={isHome}>
-            Tạo bill
+            {t('nav.create_bill')}
           </Tab>
           <Tab href={billTabHref} active={isBillDetail}>
             {billTabLabel}
           </Tab>
           <Tab href="/profile" active={isProfile}>
-            Hồ sơ
+            {t('nav.profile')}
           </Tab>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Nút chuyển ngôn ngữ — cùng cơ chế fixed-position + neo theo rect.right như
+// FaucetMenu (KHÔNG dùng window.innerWidth, tránh lặp lại bug dropdown dạt
+// sang trái trên mobile đã sửa ở đó).
+// TODO: bổ sung { code: 'zh', label: '中' }, { code: 'ko', label: '한' }, { code: 'ja', label: '日' } khi có bản dịch
+const LOCALES = [
+  { code: 'vi', label: 'VI' },
+  { code: 'en', label: 'EN' },
+] as const
+
+function LocaleSwitcher() {
+  const router = useRouter()
+  const { t } = useTranslation('common')
+  const [open, setOpen] = useState(false)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const DROPDOWN_WIDTH = 120
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const handleToggle = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setDropdownPos({
+        top: rect.bottom + 8,
+        left: Math.max(8, rect.right - DROPDOWN_WIDTH),
+      })
+    }
+    setOpen((v) => !v)
+  }
+
+  const changeLocale = (locale: string) => {
+    setOpen(false)
+    router.push(router.pathname, router.asPath, { locale })
+  }
+
+  const currentLabel = LOCALES.find((l) => l.code === router.locale)?.label ?? 'EN'
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        ref={btnRef}
+        onClick={handleToggle}
+        title={t('language.button')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '8px 14px',
+          borderRadius: 99,
+          border: `1px solid ${colors.border}`,
+          background: open ? colors.backgroundSubtle : colors.surface,
+          color: colors.textSecondary,
+          fontSize: 13.5,
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        🌐 {currentLabel}
+      </button>
+
+      {open && dropdownPos && (
+        <div
+          style={{
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            width: DROPDOWN_WIDTH,
+            maxWidth: 'calc(100vw - 16px)',
+            background: colors.surface,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 12,
+            boxShadow: `0 12px 30px ${colors.shadowColor}`,
+            padding: 6,
+            zIndex: 9999,
+          }}
+        >
+          {LOCALES.map((l) => (
+            <button
+              key={l.code}
+              onClick={() => changeLocale(l.code)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: 'none',
+                background: router.locale === l.code ? colors.backgroundSubtle : 'transparent',
+                color: colors.textPrimary,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -106,9 +227,12 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
 // (khác fix C.3 chỉ hiện khi rơi đúng lỗi insufficient_balance giữa lúc trả
 // cross-chain — quá ẩn, user thật không tìm ra). 2 chỗ tồn tại song song,
 // không thay thế nhau.
+const FAUCET_DROPDOWN_WIDTH = 240
+
 function FaucetMenu() {
+  const { t } = useTranslation('common')
   const [open, setOpen] = useState(false)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -124,11 +248,15 @@ function FaucetMenu() {
   const handleToggle = () => {
     if (!open && btnRef.current) {
       // Tính toạ độ tuyệt đối từ bounding rect của nút — thiết lập dropdown fixed position
-      // để không bị cắt bởi overflow-x: hidden trên html/body (bug mobile)
+      // để không bị cắt bởi overflow-x: hidden trên html/body (bug mobile).
+      // Neo theo rect.right (đo trực tiếp trên DOM đã render, luôn đúng viewport thật)
+      // thay vì window.innerWidth — trên mobile giá trị này có lúc lệch với viewport
+      // hiển thị thật (layout viewport vs visual viewport chưa kịp đồng bộ), khiến
+      // dropdown bị đẩy dạt hẳn sang trái, ra ngoài màn hình.
       const rect = btnRef.current.getBoundingClientRect()
       setDropdownPos({
         top: rect.bottom + 8,
-        right: Math.max(8, window.innerWidth - rect.right),
+        left: Math.max(8, rect.right - FAUCET_DROPDOWN_WIDTH),
       })
     }
     setOpen((v) => !v)
@@ -153,7 +281,7 @@ function FaucetMenu() {
           cursor: 'pointer',
         }}
       >
-        💧 Faucet
+        {t('faucet.button')}
       </button>
 
       {open && dropdownPos && (
@@ -161,8 +289,8 @@ function FaucetMenu() {
           style={{
             position: 'fixed',
             top: dropdownPos.top,
-            right: dropdownPos.right,
-            width: 240,
+            left: dropdownPos.left,
+            width: FAUCET_DROPDOWN_WIDTH,
             maxWidth: 'calc(100vw - 16px)',
             background: colors.surface,
             border: `1px solid ${colors.border}`,
@@ -172,12 +300,12 @@ function FaucetMenu() {
             zIndex: 9999,
           }}
         >
-          <FaucetSectionLabel>USDC</FaucetSectionLabel>
+          <FaucetSectionLabel>{t('faucet.usdc_label')}</FaucetSectionLabel>
           <FaucetLink href="https://faucet.circle.com" onNavigate={() => setOpen(false)}>
-            Faucet USDC
+            {t('faucet.usdc_link')}
           </FaucetLink>
 
-          <FaucetSectionLabel style={{ marginTop: 10 }}>Gas (ETH test)</FaucetSectionLabel>
+          <FaucetSectionLabel style={{ marginTop: 10 }}>{t('faucet.gas_label')}</FaucetSectionLabel>
           {GAS_FAUCET_LINKS.map((chain) => (
             <FaucetLink key={chain.href} href={chain.href} onNavigate={() => setOpen(false)}>
               {chain.label}
@@ -185,7 +313,7 @@ function FaucetMenu() {
           ))}
 
           <p style={{ fontSize: 10.5, color: colors.textMuted, marginTop: 8, padding: '0 6px', lineHeight: 1.5 }}>
-            Giới hạn ~20 USDC/2 giờ/địa chỉ/chain
+            {t('faucet.limit_note')}
           </p>
         </div>
       )}

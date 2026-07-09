@@ -1,9 +1,11 @@
 import { useAccount, usePublicClient } from 'wagmi'
-import type { NextPage } from 'next'
+import type { NextPage, GetServerSideProps } from 'next'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'next-i18next'
+import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
 import { formatUnits, toFunctionSelector } from 'viem'
 import { colors, radius } from '../styles/theme'
 import { SabiHeader } from '../components/SabiHeader'
@@ -11,6 +13,10 @@ import { SabiLogo } from '../components/SabiLogo'
 import { arcTestnet } from '../wagmi'
 import { useProfileData, useBillsProgress, BillProgress, CreatedBill, PaymentMade } from '../hooks/useProfileData'
 import { useUserProfileSync, useBillTitlesSync, saveProfileName as firebaseSaveProfileName, saveAvatar as firebaseSaveAvatar } from '../hooks/useFirebaseSync'
+
+export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
+  props: { ...(await serverSideTranslations(locale ?? 'en', ['common'])) },
+})
 
 const PAGE_SIZE = 5
 
@@ -33,6 +39,7 @@ function getBillTitleFromMap(billId: bigint, firestoreTitles: Record<string, str
 }
 
 const Profile: NextPage = () => {
+  const { t } = useTranslation('common')
   const { address, isConnected } = useAccount()
   const { billsCreated, paymentsMade, totalContributed, paidShareCountByBillId, isLoading } = useProfileData(address)
   const [createdPage, setCreatedPage] = useState(0)
@@ -42,6 +49,7 @@ const Profile: NextPage = () => {
   // Khi đổi tên trên PC → điện thoại tự cập nhật mà không cần reload.
   const [profileName, setProfileName] = useState('')
   const [nameDraft, setNameDraft] = useState('')
+  const [isEditingName, setIsEditingName] = useState(false)
 
   // Đọc localStorage trước — hiện ngay khi load, Firebase sẽ ghi đè nếu có data mới hơn
   useEffect(() => {
@@ -67,6 +75,17 @@ const Profile: NextPage = () => {
     firebaseSaveProfileName(address, name)
     setProfileName(name)
     setNameDraft('')
+    setIsEditingName(false)
+  }
+
+  const startEditName = () => {
+    setNameDraft(profileName)
+    setIsEditingName(true)
+  }
+
+  const cancelEditName = () => {
+    setNameDraft('')
+    setIsEditingName(false)
   }
 
   // Avatar — tải từ localStorage trước, Firebase Storage URL sẽ ghi đè qua useUserProfileSync
@@ -147,7 +166,7 @@ const Profile: NextPage = () => {
   return (
     <div style={wrap}>
       <Head>
-        <title>Hồ sơ — Sabi</title>
+        <title>{t('profile.page_title')}</title>
       </Head>
 
       <SabiHeader />
@@ -168,7 +187,7 @@ const Profile: NextPage = () => {
                 fontSize: 14,
               }}
             >
-              Kết nối ví để xem hồ sơ của bạn.
+              {t('profile.connect_prompt')}
             </div>
           ) : (
             <>
@@ -216,7 +235,7 @@ const Profile: NextPage = () => {
                     {avatarDraftUrl || avatarUrl ? (
                       <img
                         src={avatarDraftUrl || avatarUrl}
-                        alt="Ảnh đại diện"
+                        alt={t('profile.avatar_alt')}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
                     ) : profileName ? (
@@ -229,7 +248,7 @@ const Profile: NextPage = () => {
                       mở được chọn ảnh, không ai biết bấm vào đâu */}
                   <button
                     onClick={() => avatarInputRef.current?.click()}
-                    title="Đổi ảnh đại diện"
+                    title={t('profile.change_avatar_title')}
                     style={{
                       position: 'absolute',
                       bottom: -2,
@@ -253,7 +272,7 @@ const Profile: NextPage = () => {
                 <div style={{ flex: 1, minWidth: 160 }}>
                   {avatarDraftUrl && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 12, color: colors.textSecondary }}>Ảnh mới đã chọn —</span>
+                      <span style={{ fontSize: 12, color: colors.textSecondary }}>{t('profile.new_photo_selected')}</span>
                       <button
                         onClick={saveAvatar}
                         style={{
@@ -267,7 +286,7 @@ const Profile: NextPage = () => {
                           cursor: 'pointer',
                         }}
                       >
-                        Lưu ảnh
+                        {t('profile.save_photo')}
                       </button>
                       <button
                         onClick={cancelAvatarDraft}
@@ -282,18 +301,35 @@ const Profile: NextPage = () => {
                           cursor: 'pointer',
                         }}
                       >
-                        Huỷ
+                        {t('profile.cancel')}
                       </button>
                     </div>
                   )}
-                  {profileName ? (
-                    <div style={{ fontSize: 16, fontWeight: 700, color: colors.textPrimary }}>{profileName}</div>
+                  {profileName && !isEditingName ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: colors.textPrimary }}>{profileName}</div>
+                      <button
+                        onClick={startEditName}
+                        style={{
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          color: colors.textSecondary,
+                          background: 'none',
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: 6,
+                          padding: '2px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {t('profile.change_name')}
+                      </button>
+                    </div>
                   ) : (
                     <div style={{ display: 'flex', gap: 6 }}>
                       <input
                         value={nameDraft}
                         onChange={(e) => setNameDraft(e.target.value)}
-                        placeholder="Đặt tên cho hồ sơ này"
+                        placeholder={t('profile.name_placeholder')}
                         style={{
                           fontSize: 13,
                           padding: '6px 10px',
@@ -318,8 +354,25 @@ const Profile: NextPage = () => {
                           opacity: nameDraft.trim() ? 1 : 0.5,
                         }}
                       >
-                        Lưu
+                        {t('bill.save')}
                       </button>
+                      {profileName && (
+                        <button
+                          onClick={cancelEditName}
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: colors.textSecondary,
+                            background: 'none',
+                            border: `1px solid ${colors.border}`,
+                            borderRadius: 6,
+                            padding: '0 10px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {t('profile.cancel')}
+                        </button>
+                      )}
                     </div>
                   )}
                   <div
@@ -336,21 +389,21 @@ const Profile: NextPage = () => {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 22, marginLeft: 'auto' }}>
-                  <Stat label="bill đã tạo" value={billsCreated.length} />
-                  <Stat label="lần đã trả" value={paymentsMade.length} />
-                  <Stat label="USDC đã góp" value={formatUnits(totalContributed, 6)} />
+                  <Stat label={t('profile.stat_bills_created')} value={billsCreated.length} />
+                  <Stat label={t('profile.stat_payments_made')} value={paymentsMade.length} />
+                  <Stat label={t('profile.stat_usdc_contributed')} value={formatUnits(totalContributed, 6)} />
                 </div>
               </div>
 
               {isLoading && billsCreated.length === 0 && paymentsMade.length === 0 && (
                 <p style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', marginBottom: 16 }}>
-                  Đang tải lịch sử on-chain...
+                  {t('profile.loading_onchain_history')}
                 </p>
               )}
 
               <div className="sabi-grid-profile">
-                <Section title="Bill đã tạo" sub="Bấm vào để mở trang chi tiết">
-                  {!isLoading && billsCreated.length === 0 && <EmptyRow text="Chưa tạo bill nào." />}
+                <Section title={t('profile.section_created_title')} sub={t('profile.section_created_sub')}>
+                  {!isLoading && billsCreated.length === 0 && <EmptyRow text={t('profile.empty_created')} />}
                   {visibleCreated.map((bill) => (
                     <CreatedBillRow key={bill.txHash} bill={bill} progress={billsProgress[bill.billId.toString()]} titleMap={firestoreBillTitles} />
                   ))}
@@ -359,8 +412,8 @@ const Profile: NextPage = () => {
                   )}
                 </Section>
 
-                <Section title="Bill đã trả" sub="Mỗi dòng gắn tx hash thật — bấm mở arcscan">
-                  {!isLoading && paymentsMade.length === 0 && <EmptyRow text="Chưa trả bill nào." />}
+                <Section title={t('profile.section_paid_title')} sub={t('profile.section_paid_sub')}>
+                  {!isLoading && paymentsMade.length === 0 && <EmptyRow text={t('profile.empty_paid')} />}
                   {visiblePaid.map((p, i) => (
                     <PaymentRow key={`${p.txHash}-${i}`} payment={p} titleMap={firestoreBillTitles} />
                   ))}
@@ -411,6 +464,7 @@ function EmptyRow({ text }: { text: string }) {
 }
 
 function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (page: number) => void }) {
+  const { t } = useTranslation('common')
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 4 }}>
       <button
@@ -427,10 +481,10 @@ function Pagination({ page, totalPages, onChange }: { page: number; totalPages: 
           cursor: page === 0 ? 'not-allowed' : 'pointer',
         }}
       >
-        ← Trước
+        {t('bill.prev_page')}
       </button>
       <span style={{ fontSize: 12, color: colors.textSecondary }}>
-        Trang {page + 1}/{totalPages}
+        {t('bill.page_indicator', { current: page + 1, total: totalPages })}
       </span>
       <button
         onClick={() => onChange(Math.min(totalPages - 1, page + 1))}
@@ -446,7 +500,7 @@ function Pagination({ page, totalPages, onChange }: { page: number; totalPages: 
           cursor: page >= totalPages - 1 ? 'not-allowed' : 'pointer',
         }}
       >
-        Sau →
+        {t('bill.next_page')}
       </button>
     </div>
   )
@@ -473,6 +527,7 @@ function ModeBadge({ mode }: { mode: number }) {
 
 function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progress: BillProgress | undefined; titleMap: Record<string, string> }) {
   const router = useRouter()
+  const { t } = useTranslation('common')
   const href = `/bill/${bill.billId.toString()}`
 
   // Prefetch ngay khi danh sách render — bấm vào nhảy liền, không chờ Next.js
@@ -518,12 +573,12 @@ function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progr
               color: isDone ? colors.success : colors.warning,
             }}
           >
-            {isDone ? 'ĐÃ ĐỦ' : 'ĐANG THU'}
+            {isDone ? t('profile.badge_done') : t('profile.badge_collecting')}
           </span>
         )}
       </div>
       <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>
-        {progress ? `${progress.paidCount}/${progress.totalCount} đã trả · ` : ''}
+        {progress ? `${progress.paidCount}/${progress.totalCount} ${t('profile.paid_suffix')} · ` : ''}
         {formatUnits(bill.totalAmount, 6)} USDC
       </div>
 
@@ -543,6 +598,7 @@ function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progr
 
 function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Record<string, string> }) {
   const router = useRouter()
+  const { t } = useTranslation('common')
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [method, setMethod] = useState<'direct' | 'crosschain' | null>(null)
   const href = `/bill/${payment.billId.toString()}`
@@ -572,7 +628,7 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
     }
   }, [payment.txHash, publicClient])
 
-  const description = method === 'crosschain' ? 'cross-chain' : method === 'direct' ? 'trực tiếp trên Arc' : null
+  const description = method === 'crosschain' ? t('profile.payment_method_crosschain') : method === 'direct' ? t('profile.payment_method_direct') : null
 
   return (
     <div

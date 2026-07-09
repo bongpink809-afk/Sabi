@@ -16,6 +16,7 @@ import {
   updateUserProfile,
   uploadAvatar,
   fetchBillTitles,
+  fetchUserProfiles,
   BillFirestoreData,
   UserFirestoreData,
 } from '../lib/firebase'
@@ -143,6 +144,37 @@ export function useBillTitlesSync(
   }, [billIdsKey])
 }
 
+/**
+ * Batch-fetch hồ sơ (profileName, avatarUrl) của nhiều địa chỉ ví — dùng để
+ * hiện avatar/tên thật của người trả trong hoá đơn/danh sách phần trả, thay
+ * vì tên gõ tay hoặc avatar chỉ lưu local theo từng máy.
+ *
+ * @example
+ * useProfilesSync(payerAddresses, (profiles) => {
+ *   setProfiles((prev) => ({ ...prev, ...profiles }))
+ * })
+ */
+export function useProfilesSync(
+  addresses: string[],
+  onFetched: (profiles: Record<string, UserFirestoreData>) => void
+) {
+  const callbackRef = useRef(onFetched)
+  callbackRef.current = onFetched
+
+  // Stringify làm dependency — chỉ chạy lại khi danh sách địa chỉ thật sự đổi
+  const addressesKey = Array.from(new Set(addresses.map((a) => a.toLowerCase()))).sort().join(',')
+
+  useEffect(() => {
+    if (!addresses.length) return
+    fetchUserProfiles(addresses).then((profiles) => {
+      if (Object.keys(profiles).length > 0) {
+        callbackRef.current(profiles)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressesKey])
+}
+
 // ─── Helpers: ghi dữ liệu lên cả localStorage lẫn Firestore ────────────────────────
 
 /**
@@ -184,20 +216,6 @@ export async function saveSingleShareName(
 }
 
 /**
- * Lưu tên người góp slot (OPEN_SLOT mode): localStorage + Firestore.
- */
-export async function saveSlotContributorName(
-  billId: string,
-  txHash: string,
-  name: string,
-  currentSlotNames: Record<string, string>
-): Promise<void> {
-  const next = { ...currentSlotNames, [txHash]: name }
-  localStorage.setItem(`sabi-bill-${billId}-slotnames`, JSON.stringify(next))
-  await updateBillData(billId, { slotNames: next })
-}
-
-/**
  * Upload avatar lên Firebase Storage + lưu URL vào Firestore.
  * Cần bật Firebase Storage trong Firebase Console trước khi dùng.
  */
@@ -208,8 +226,13 @@ export async function saveAvatar(walletAddress: string, base64DataUrl: string): 
   // Upload lên Firebase Storage → lưu URL vào Firestore
   const url = await uploadAvatar(key, base64DataUrl)
   if (url) {
-    localStorage.setItem(`sabi-profile-avatar-url-${key}`, url)
-    await updateUserProfile(key, { avatarUrl: url })
+    // Storage ghi đè cùng 1 path (avatars/{address}) nên download URL giữ
+    // nguyên token y hệt lần trước — gắn thêm ?v=timestamp để URL thực sự đổi,
+    // ép trình duyệt tải lại ảnh mới thay vì dùng cache của ảnh cũ (thiết bị
+    // khác nhận URL giống hệt qua onSnapshot nên <img src> không đổi giá trị).
+    const versionedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`
+    localStorage.setItem(`sabi-profile-avatar-url-${key}`, versionedUrl)
+    await updateUserProfile(key, { avatarUrl: versionedUrl })
   }
 }
 

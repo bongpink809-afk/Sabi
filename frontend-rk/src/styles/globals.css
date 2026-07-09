@@ -55,6 +55,12 @@ a {
   gap: 22px;
 }
 
+/* Nút ngôn ngữ render 2 lần (mobile-slot cạnh logo + desktop-slot cạnh Faucet) —
+   CSS chỉ hiện đúng 1 bản theo breakpoint, không đổi gì trên PC. */
+.sabi-locale-mobile {
+  display: none;
+}
+
 /* 2 mode card cạnh nhau — wrap khi không đủ rộng */
 .sabi-mode-cards {
   display: flex;
@@ -92,10 +98,27 @@ a {
     display: none !important;
   }
 
-  /* Header — padding nhỏ hơn, không để RainbowKit button tràn */
+  /* Header — padding nhỏ hơn, không để RainbowKit button tràn.
+     Tách thành 2 hàng: hàng 1 = logo + ngôn ngữ, hàng 2 = Faucet + ví —
+     tránh dồn 4 nút (ngôn ngữ, Faucet, chain, ví) chung 1 hàng chật trên mobile. */
   .sabi-header-inner {
     padding: 10px 12px !important;
     flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .sabi-header-brand {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .sabi-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+  .sabi-locale-mobile {
+    display: flex;
+  }
+  .sabi-locale-desktop {
+    display: none;
   }
 
   /* Giảm padding trang trên mobile */
