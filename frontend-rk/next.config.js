@@ -12,6 +12,14 @@ const nextConfig = {
     '*.ngrok.io',         // ngrok legacy
     '*.ngrok-free.dev',   // ngrok
   ],
+  // Fix: MetaMask SDK kéo React Native dependency vào môi trường web
+  webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@react-native-async-storage/async-storage': false,
+    }
+    return config
+  },
 };
 
-module.exports = nextConfig;
+module.exports = nextConfig
