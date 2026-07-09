@@ -45,10 +45,13 @@ a {
    PC: đẩy xuống + cân bằng trên/dưới (mặc định trước đây dồn hết lên đầu
    vì content thường thấp hơn viewport). Mobile giữ nguyên, không đổi. */
 @media (min-width: 769px) {
+  .sabi-tabbar-row {
+    padding-top: 34px !important;
+  }
   .sabi-page-main,
   .sabi-grid-create {
-    padding-top: 56px !important;
-    padding-bottom: 56px !important;
+    padding-top: 88px !important;
+    padding-bottom: 40px !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
   }

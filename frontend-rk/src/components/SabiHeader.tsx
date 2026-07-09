@@ -83,7 +83,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
         </div>
       </header>
 
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '18px 16px 0' }}>
+      <div className="sabi-tabbar-row" style={{ display: 'flex', justifyContent: 'center', padding: '18px 16px 0' }}>
         <div
           style={{
             display: 'flex',
