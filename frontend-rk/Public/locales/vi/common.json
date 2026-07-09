@@ -86,6 +86,8 @@
     "collected": "ĐÃ THU"
   },
   "bill": {
+    "empty_page_title": "Chi tiết bill — Sabi",
+    "empty_state": "Chưa có bill nào để xem chi tiết — tạo bill mới hoặc mở link 1 bill có sẵn.",
     "loading_id": "Đang tải billId từ URL...",
     "loading_info": "Đang tải thông tin bill...",
     "not_found": "Không tìm thấy bill này.",

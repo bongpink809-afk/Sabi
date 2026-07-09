@@ -86,6 +86,8 @@
     "collected": "COLLECTED"
   },
   "bill": {
+    "empty_page_title": "Bill detail — Sabi",
+    "empty_state": "No bill to view yet — create a new bill or open an existing bill link.",
     "loading_id": "Loading billId from URL...",
     "loading_info": "Loading bill info...",
     "not_found": "Bill not found.",
