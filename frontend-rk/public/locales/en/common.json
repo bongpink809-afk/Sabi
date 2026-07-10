@@ -166,7 +166,7 @@
     "paid_crosschain_from": "cross-chain from {{chain}}",
     "unpaid_label": "Unpaid",
     "processing_short": "Processing...",
-    "allow_usdc": "Allow USDC",
+    "allow_usdc": "Aprove USDC",
     "pay_button": "Pay",
     "waiting_wallet_sign": "Waiting for signature in wallet...",
     "sent_waiting_confirm": "Sent, waiting for confirmation...",

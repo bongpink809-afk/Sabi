@@ -166,7 +166,7 @@
     "paid_crosschain_from": "cross-chain từ {{chain}}",
     "unpaid_label": "Chưa trả",
     "processing_short": "Đang xử lý...",
-    "allow_usdc": "Cho phép dùng USDC",
+    "allow_usdc": "Approve USDC",
     "pay_button": "Thanh toán",
     "waiting_wallet_sign": "Đang chờ ký trong ví...",
     "sent_waiting_confirm": "Đã gửi, đang chờ xác nhận...",
