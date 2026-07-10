@@ -1417,7 +1417,7 @@ function ShareRow({
       {isPaying && !payTxHash && (
         <p style={{ color: colors.textSecondary, fontSize: 11, marginTop: 6 }}>{t('bill.waiting_wallet_sign')}</p>
       )}
-      {payTxHash && !paySuccess && !payError && (
+      {payTxHash && !paySuccess && !payError && !isPaid && (
         <p style={{ color: colors.textSecondary, fontSize: 11, marginTop: 6 }}>{t('bill.sent_waiting_confirm')}</p>
       )}
       {payError && (
