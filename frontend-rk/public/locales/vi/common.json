@@ -51,6 +51,57 @@
       "default_desc": "Lỗi không xác định."
     }
   },
+  "paymentModal": {
+    "chain": {
+      "title": "Trả {{amount}} USDC — phần của {{name}}",
+      "subtitle": "Chọn chain bạn đang có USDC. Hệ thống check balance trước khi cho ký.",
+      "balance_label": "balance: {{amount}} USDC",
+      "balance_loading": "đang kiểm tra...",
+      "default_payer_name": "bạn",
+      "cancel": "Hủy",
+      "sign_button": "Ký depositForBurn"
+    },
+    "progress": {
+      "title": "Đang chuyển qua CCTP V2 — Fast Transfer",
+      "subtitle": "Thường 8–20 giây. Đóng tab cũng không sao, trạng thái được lưu lại.",
+      "step_burn": "Burn",
+      "step_attestation": "Attestation",
+      "step_mint": "Mint + ghi nhận",
+      "log_checking_balance": "Kiểm tra số dư USDC trên {{chain}}…",
+      "log_burning": "Ký depositForBurnWithHook trên {{chain}}…",
+      "log_burn_confirmed": "Burn confirmed · tx {{hash}}",
+      "log_poll_attestation": "Poll Iris — đợi attestation (8–20s)…",
+      "log_attestation_delayed": "Circle xử lý lâu hơn bình thường, tiếp tục chờ…",
+      "log_attestation_ready": "Attestation ready",
+      "log_calling_relay": "Gọi SabiBill.payCrossChain trên Arc…",
+      "log_success_final": "receiveMessage OK → balance delta → forward organizer",
+      "node_attestation_waiting": "đang chờ…",
+      "node_attestation_complete": "complete",
+      "node_mint_relaying": "đang relay…"
+    },
+    "success": {
+      "title": "Đã trả xong",
+      "subtitle": "Mint + ghi nhận + forward organizer trong cùng 1 transaction",
+      "arcscan_link": "arcscan: {{hash}} ↗",
+      "view_bill_button": "Xem bill"
+    },
+    "arc": {
+      "subtitle_default": "Thanh toán trực tiếp trên Arc Testnet.",
+      "subtitle_ready": "Thanh toán trực tiếp trên Arc Testnet · {{balance}} USDC có sẵn.",
+      "insufficient_title": "⚠ Không đủ số dư",
+      "insufficient_body": "Ví đang có {{balance}} USDC trên Arc Testnet — cần ít nhất {{needed}} USDC.",
+      "faucet_usdc": "💧 Lấy USDC test",
+      "pay_button": "Ký & Thanh toán",
+      "node_check_balance": "Kiểm tra số dư",
+      "node_check_balance_sub": "đủ số dư",
+      "node_payment": "Thanh toán",
+      "node_payment_confirming": "đang confirm…",
+      "log_signing": "Ký {{fn}} trên Arc Testnet…",
+      "log_sent": "Gửi transaction tới SabiBill…",
+      "log_confirmed": "Transaction confirmed · {{hash}}",
+      "success_subtitle": "USDC đã chuyển tới organizer · xác nhận trên Arc"
+    }
+  },
   "create": {
     "page_title": "Tạo bill — Sabi",
     "mode_assigned_title": "Chia theo danh sách",
@@ -150,7 +201,7 @@
     "stat_bills_created": "bill đã tạo",
     "stat_payments_made": "lần đã trả",
     "stat_usdc_contributed": "USDC đã góp",
-    "loading_onchain_history": "Đang tải lịch sử on-chain...",
+    "loading_onchain_history": "Đang tải lịch sử",
     "section_created_title": "Bill đã tạo",
     "section_created_sub": "Bấm vào để mở trang chi tiết",
     "empty_created": "Chưa tạo bill nào.",

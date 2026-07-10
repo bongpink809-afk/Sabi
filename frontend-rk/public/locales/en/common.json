@@ -51,6 +51,57 @@
       "default_desc": "Unknown error."
     }
   },
+  "paymentModal": {
+    "chain": {
+      "title": "Pay {{amount}} USDC — {{name}}'s share",
+      "subtitle": "Pick the chain where you hold USDC. Balance is checked before you can sign.",
+      "balance_label": "balance: {{amount}} USDC",
+      "balance_loading": "checking...",
+      "default_payer_name": "you",
+      "cancel": "Cancel",
+      "sign_button": "Sign depositForBurn"
+    },
+    "progress": {
+      "title": "Transferring via CCTP V2 — Fast Transfer",
+      "subtitle": "Usually 8–20 seconds. It's fine to close this tab — progress is saved.",
+      "step_burn": "Burn",
+      "step_attestation": "Attestation",
+      "step_mint": "Mint + record",
+      "log_checking_balance": "Checking USDC balance on {{chain}}…",
+      "log_burning": "Signing depositForBurnWithHook on {{chain}}…",
+      "log_burn_confirmed": "Burn confirmed · tx {{hash}}",
+      "log_poll_attestation": "Polling Iris — waiting for attestation (8–20s)…",
+      "log_attestation_delayed": "Circle is taking longer than usual, still waiting…",
+      "log_attestation_ready": "Attestation ready",
+      "log_calling_relay": "Calling SabiBill.payCrossChain on Arc…",
+      "log_success_final": "receiveMessage OK → balance delta → forward organizer",
+      "node_attestation_waiting": "waiting…",
+      "node_attestation_complete": "complete",
+      "node_mint_relaying": "relaying…"
+    },
+    "success": {
+      "title": "Payment complete",
+      "subtitle": "Mint + record + forward to organizer in a single transaction",
+      "arcscan_link": "arcscan: {{hash}} ↗",
+      "view_bill_button": "View bill"
+    },
+    "arc": {
+      "subtitle_default": "Direct payment on Arc Testnet.",
+      "subtitle_ready": "Direct payment on Arc Testnet · {{balance}} USDC available.",
+      "insufficient_title": "⚠ Insufficient balance",
+      "insufficient_body": "Wallet has {{balance}} USDC on Arc Testnet — needs at least {{needed}} USDC.",
+      "faucet_usdc": "💧 Get test USDC",
+      "pay_button": "Sign & Pay",
+      "node_check_balance": "Check balance",
+      "node_check_balance_sub": "sufficient",
+      "node_payment": "Payment",
+      "node_payment_confirming": "confirming…",
+      "log_signing": "Signing {{fn}} on Arc Testnet…",
+      "log_sent": "Sending transaction to SabiBill…",
+      "log_confirmed": "Transaction confirmed · {{hash}}",
+      "success_subtitle": "USDC transferred to organizer · confirmed on Arc"
+    }
+  },
   "create": {
     "page_title": "Create bill — Sabi",
     "mode_assigned_title": "Split by list",

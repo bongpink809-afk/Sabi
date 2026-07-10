@@ -10,9 +10,14 @@ import { formatUnits, HttpRequestError } from 'viem'
 import { sepolia } from 'wagmi/chains'
 import { SABI_BILL_ADDRESS, SABI_BILL_DEPLOY_BLOCK, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
+import { PaymentChainModal } from '../../components/PaymentChainModal'
+import { CrossChainProgressModal } from '../../components/CrossChainProgressModal'
+import { PaymentSuccessModal } from '../../components/PaymentSuccessModal'
+import { PaymentArcModal } from '../../components/PaymentArcModal'
 import { SabiHeader } from '../../components/SabiHeader'
 import { arcTestnet } from '../../wagmi'
 import { useCrossChainPayment } from '../../hooks/useCrossChainPayment'
+import { SourceChain } from '../../hooks/useBurnCrossChain'
 import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
@@ -1175,6 +1180,28 @@ function ShareRow({
   // Mỗi ShareRow tự quản lý trạng thái cross-chain của CHÍNH NÓ — độc lập hoàn toàn với share khác
   const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay, isDelayed: ccIsDelayed } = useCrossChainPayment(billId, shareId)
 
+  // Modal 1 (chọn chain) — chỉ hiện khi user bấm trả cross-chain, chưa ký gì
+  const [showChainModal, setShowChainModal] = useState(false)
+  // Modal trả trực tiếp trên Arc — chỉ mở khi payMethod === 'arc'
+  const [showArcModal, setShowArcModal] = useState(false)
+  // Modal 3 (success) — tự capture hash lúc ccState chuyển success, vì
+  // ccState có thể tự reset về idle ngay sau đó (effect bên dưới) mà modal
+  // success vẫn phải đứng yên tới khi user bấm "Xem bill". Giữ Modal 2 thêm
+  // 700ms sau khi success để log kịp hiện dòng cuối + coin mờ dần trước khi
+  // chuyển sang Modal 3, giống hệt choreography trong prototype.
+  const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | undefined>(undefined)
+  const [holdProgressModal, setHoldProgressModal] = useState(false)
+  useEffect(() => {
+    if (ccState.status === 'success' && ccState.relayTxHash) {
+      setHoldProgressModal(true)
+      const timer = setTimeout(() => {
+        setSuccessTxHash(ccState.relayTxHash)
+        setHoldProgressModal(false)
+      }, 700)
+      return () => clearTimeout(timer)
+    }
+  }, [ccState.status, ccState.relayTxHash])
+
   useEffect(() => {
     if (paySuccess || ccState.status === 'success') refetchShare()
   }, [paySuccess, ccState.status])
@@ -1227,10 +1254,15 @@ function ShareRow({
       return
     }
     if (payMethod !== 'arc') {
-      await startCrossChainPay(share.amount, payMethod)
+      setShowChainModal(true)
       return
     }
-    onPayDirect(shareId)
+    setShowArcModal(true)
+  }
+
+  const handleConfirmChain = (chain: SourceChain) => {
+    setShowChainModal(false)
+    startCrossChainPay(share.amount, chain)
   }
 
   const handleRetryCrossChain = () => {
@@ -1414,17 +1446,32 @@ function ShareRow({
       </div>
       </div>
 
-      {isPaying && !payTxHash && (
-        <p style={{ color: colors.textSecondary, fontSize: 11, marginTop: 6 }}>{t('bill.waiting_wallet_sign')}</p>
-      )}
-      {payTxHash && !paySuccess && !payError && !isPaid && (
-        <p style={{ color: colors.textSecondary, fontSize: 11, marginTop: 6 }}>{t('bill.sent_waiting_confirm')}</p>
-      )}
-      {payError && (
-        <p style={{ color: colors.danger, fontSize: 11, marginTop: 6 }}>{t('bill.error_prefix', { message: payError.message.split('\n')[0] })}</p>
-      )}
-      {ccState.status !== 'idle' && (
+      {ccState.status === 'error' && (
         <CrossChainStatusPanel state={ccState} onRetry={handleRetryCrossChain} onDismiss={resetCrossChainPay} isDelayed={ccIsDelayed} />
+      )}
+
+      {showChainModal && (
+        <PaymentChainModal
+          amount={share.amount}
+          payerName={displayName || t('paymentModal.chain.default_payer_name')}
+          onCancel={() => setShowChainModal(false)}
+          onConfirm={handleConfirmChain}
+        />
+      )}
+      {(isCrossChainBusy || holdProgressModal) && <CrossChainProgressModal state={ccState} isDelayed={ccIsDelayed} />}
+      {successTxHash && <PaymentSuccessModal txHash={successTxHash} onClose={() => setSuccessTxHash(undefined)} />}
+      {showArcModal && (
+        <PaymentArcModal
+          amount={share.amount}
+          payerName={displayName || t('paymentModal.chain.default_payer_name')}
+          functionName="payShare"
+          onClose={() => setShowArcModal(false)}
+          onPay={() => onPayDirect(shareId)}
+          isPaying={isPaying}
+          payTxHash={payTxHash}
+          paySuccess={paySuccess}
+          payError={payError}
+        />
       )}
     </div>
   )
@@ -1489,6 +1536,23 @@ function OpenSlotInfo({
   const { state: ccState, start: startCrossChainPay, reset: resetCrossChainPay, isDelayed: ccIsDelayed } = useCrossChainPayment(billId, undefined)
   const isCrossChainBusy = !['idle', 'success', 'error'].includes(ccState.status)
 
+  const [showChainModal, setShowChainModal] = useState(false)
+  const [showArcModal, setShowArcModal] = useState(false)
+  // Giữ Modal 2 thêm 700ms sau khi success để log kịp hiện dòng cuối + coin
+  // mờ dần trước khi chuyển sang Modal 3 — xem ShareRow ở trên cho lý do đầy đủ.
+  const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | undefined>(undefined)
+  const [holdProgressModal, setHoldProgressModal] = useState(false)
+  useEffect(() => {
+    if (ccState.status === 'success' && ccState.relayTxHash) {
+      setHoldProgressModal(true)
+      const timer = setTimeout(() => {
+        setSuccessTxHash(ccState.relayTxHash)
+        setHoldProgressModal(false)
+      }, 700)
+      return () => clearTimeout(timer)
+    }
+  }, [ccState.status, ccState.relayTxHash])
+
   // Relay xong → kéo lại bill + danh sách góp (trước đây chỉ refetch khi trả trực tiếp,
   // trả cross-chain phải F5 mới thấy dòng mới). Refetch lại 1 lần sau 6s phòng RPC index trễ.
   useEffect(() => {
@@ -1518,10 +1582,15 @@ function OpenSlotInfo({
       return
     }
     if (payMethod !== 'arc') {
-      await startCrossChainPay(amountPerSlot, payMethod)
+      setShowChainModal(true)
       return
     }
-    onPayDirect()
+    setShowArcModal(true)
+  }
+
+  const handleConfirmChain = (chain: SourceChain) => {
+    setShowChainModal(false)
+    startCrossChainPay(amountPerSlot, chain)
   }
 
   const handleRetryCrossChain = () => {
@@ -1574,77 +1643,42 @@ function OpenSlotInfo({
               >
                 {isCrossChainBusy ? t('bill.processing_short') : isPaying ? t('bill.processing_short') : t('bill.contribute_button', { amount })}
               </button>
-              {/* Nút Huỷ — chỉ hiện khi đang chờ ký burn (state burning), cho phép
-                  user thoát khỏi trạng thái kẹt khi mobile wallet đóng popup không trả error */}
-              {ccState.status === 'burning' && (
-                <button
-                  onClick={resetCrossChainPay}
-                  style={{
-                    width: '100%',
-                    marginTop: 6,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    color: colors.textSecondary,
-                    background: 'none',
-                    border: `1px solid ${colors.border}`,
-                    borderRadius: radius.button,
-                    padding: '10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {t('bill.cancel_tx')}
-                </button>
-              )}
             </>
           )
         )}
 
-      {/* Trạng thái giao dịch — để không ai phải đoán mò như lúc test lần đầu */}
-      {isWalletConnected && (
-        <>
-          {isPaying && !payTxHash && (
-            <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-              {t('bill.waiting_wallet_sign')}
-            </p>
-          )}
-          {payTxHash && !paySuccess && !payError && (
-            <p style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-              {t('bill.sent_waiting_confirm_chain')}
-            </p>
-          )}
-          {paySuccess && (
-            <div style={{ marginTop: 8, textAlign: 'center' }}>
-              <p style={{ color: colors.successText, fontSize: 12, fontWeight: 600 }}>{t('bill.contribute_success')}</p>
-              {payTxHash && (
-<a
-                  href={`https://testnet.arcscan.app/tx/${payTxHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    color: colors.primary,
-                    fontSize: 11,
-                    textDecoration: 'underline',
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-                  }}
-                >
-                  {t('bill.view_tx', { hash: `${payTxHash.slice(0, 10)}...${payTxHash.slice(-8)}` })}
-                </a>
-              )}
-            </div>
-          )}
-          {payError && (
-            <p style={{ color: colors.danger, fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-              {t('bill.error_prefix', { message: payError.message.split('\n')[0] })}
-            </p>
-          )}
-        </>
-      )}
-      {isWalletConnected && ccState.status !== 'idle' && (
+      {isWalletConnected && ccState.status === 'error' && (
         <CrossChainStatusPanel
           state={ccState}
           onRetry={handleRetryCrossChain}
           onDismiss={resetCrossChainPay}
           isDelayed={ccIsDelayed}
+        />
+      )}
+
+      {showChainModal && (
+        <PaymentChainModal
+          amount={amountPerSlot}
+          payerName={t('paymentModal.chain.default_payer_name')}
+          onCancel={() => setShowChainModal(false)}
+          onConfirm={handleConfirmChain}
+        />
+      )}
+      {(isCrossChainBusy || holdProgressModal) && (
+        <CrossChainProgressModal state={ccState} isDelayed={ccIsDelayed} onCancelBurning={resetCrossChainPay} />
+      )}
+      {successTxHash && <PaymentSuccessModal txHash={successTxHash} onClose={() => setSuccessTxHash(undefined)} />}
+      {showArcModal && (
+        <PaymentArcModal
+          amount={amountPerSlot}
+          payerName={t('paymentModal.chain.default_payer_name')}
+          functionName="paySlot"
+          onClose={() => setShowArcModal(false)}
+          onPay={() => onPayDirect()}
+          isPaying={isPaying}
+          payTxHash={payTxHash}
+          paySuccess={paySuccess}
+          payError={payError}
         />
       )}
 
