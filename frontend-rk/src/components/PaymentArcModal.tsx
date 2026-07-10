@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
 import { useTranslation } from 'next-i18next'
 import { formatUnits } from 'viem'
@@ -9,6 +9,9 @@ import { ARC_USDC_ADDRESS, ERC20_ABI } from '../lib/contracts'
 import { arcTestnet } from '../wagmi'
 
 const USDC_FAUCET_URL = 'https://faucet.circle.com/'
+
+const CONFETTI_COLORS = ['#7C6AEF', '#17A268', '#D98E12', '#9A8BFF', '#4ADE97', '#E8B54A', '#17151F']
+const CONFETTI_COUNT = 40
 
 const fmt2 = (n: bigint) => Number(formatUnits(n, 6)).toFixed(2)
 
@@ -104,14 +107,49 @@ export function PaymentArcModal({
     }
   }, [phase])
 
+  const confettiPieces = useMemo(
+    () =>
+      Array.from({ length: CONFETTI_COUNT }, (_, i) => {
+        const size = 4 + Math.random() * 6
+        return {
+          id: i,
+          left: Math.random() * 100,
+          color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+          delay: Math.random() * 0.5,
+          duration: 1.4 + Math.random() * 1.6,
+          width: size,
+          height: size * 0.45,
+        }
+      }),
+    []
+  )
+
   if (showDone && payTxHash) {
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(23, 21, 31, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
         <style>{`
           @keyframes sabi-arc-check-pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
           @keyframes sabi-arc-check-draw { to { stroke-dashoffset: 0; } }
+          @keyframes sabi-arc-confetti-fall { to { transform: translateY(90vh) rotate(720deg); opacity: .08; } }
         `}</style>
-        <div style={{ background: colors.surface, borderRadius: 22, padding: '32px 24px', width: '100%', maxWidth: 540, textAlign: 'center', boxShadow: `0 8px 32px ${colors.shadowColor}` }}>
+        <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+          {confettiPieces.map((p) => (
+            <span
+              key={p.id}
+              style={{
+                position: 'absolute',
+                top: -12,
+                left: `${p.left}%`,
+                width: p.width,
+                height: p.height,
+                background: p.color,
+                borderRadius: 2,
+                animation: `sabi-arc-confetti-fall ${p.duration}s linear ${p.delay}s 1 forwards`,
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ position: 'relative', background: colors.surface, borderRadius: 22, padding: '32px 24px', width: '100%', maxWidth: 540, textAlign: 'center', boxShadow: `0 8px 32px ${colors.shadowColor}` }}>
           <div style={{ width: 68, height: 68, borderRadius: '50%', border: `2.5px solid ${colors.success}`, display: 'grid', placeItems: 'center', margin: '0 auto 14px', animation: 'sabi-arc-check-pop 0.6s cubic-bezier(.34,1.56,.64,1)' }}>
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
               <path d="M7 17 L13 23 L25 9" stroke={colors.success} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" style={{ strokeDasharray: 28, strokeDashoffset: 28, animation: 'sabi-arc-check-draw 0.35s ease-out 0.3s forwards' }} />
