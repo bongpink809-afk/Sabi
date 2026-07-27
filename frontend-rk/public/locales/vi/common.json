@@ -57,6 +57,8 @@
       "subtitle": "Chọn chain bạn đang có USDC. Hệ thống check balance trước khi cho ký.",
       "balance_label": "balance: {{amount}} USDC",
       "balance_loading": "đang kiểm tra...",
+      "insufficient_balance": "Chưa đủ USDC trên {{chain}}",
+      "faucet_button": "Faucet",
       "default_payer_name": "bạn",
       "cancel": "Hủy",
       "sign_button": "Ký depositForBurn"
@@ -147,6 +149,7 @@
     "page_title_id": "Bill #{{id}} — Sabi",
     "extra_received_note": "Có {{amount}} USDC góp lệch số tiền chuẩn",
     "share_list_title": "Danh sách phần trả",
+    "share_list_loading": "Đang tải danh sách...",
     "assigned_hint": "Tick xanh = có tx hash thật trên Arc",
     "openslot_hint": "Ai cũng góp được — cập nhật theo on-chain",
     "no_contributions": "Chưa có ai góp tiền.",

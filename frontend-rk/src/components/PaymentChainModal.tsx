@@ -95,7 +95,7 @@ export function PaymentChainModal({
         {t('paymentModal.chain.subtitle')}
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 22 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
         {CHAIN_OPTIONS.map((opt) => {
           const balance = balances[opt.key]
           const isLoading = balance === undefined
@@ -131,6 +131,40 @@ export function PaymentChainModal({
           )
         })}
       </div>
+
+      {/* Chain ví đang connect không đủ USDC — 1 dòng nhỏ + 1 nút faucet chung
+          bên dưới, thay vì nhét vào từng card. */}
+      {activeOption && balances[activeOption.key] !== undefined && balances[activeOption.key]! < amount && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            marginBottom: 18,
+          }}
+        >
+          <span style={{ fontSize: 12, color: colors.danger }}>
+            {t('paymentModal.chain.insufficient_balance', { chain: activeOption.name })}
+          </span>
+          <a
+            href="https://faucet.circle.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              flexShrink: 0,
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#fff',
+              background: colors.primary,
+              borderRadius: 50,
+              padding: '5px 14px',
+              textDecoration: 'none',
+            }}
+          >
+            {t('paymentModal.chain.faucet_button')}
+          </a>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button

@@ -13,6 +13,16 @@ export const arcTestnet = defineChain({
   blockExplorers: {
     default: { name: 'Arc Scan', url: 'https://testnet.arcscan.app' },
   },
+  contracts: {
+    // Multicall3 — địa chỉ deterministic (CREATE2) giống nhau trên mọi EVM chain,
+    // đã verify có thật trên Arc Testnet qua eth_getCode. Thiếu khai báo này khiến
+    // useReadContracts KHÔNG gộp được thành 1 lệnh multicall, phải rơi về gọi rời
+    // từng contract read (N request riêng, không qua rate-limiter của app) — đây
+    // là nguyên nhân thật của việc 1 vài share bị rớt ngẫu nhiên trong danh sách.
+    multicall3: {
+      address: '0xcA11bde05977b3631167028862bE2a173976CA11',
+    },
+  },
   testnet: true,
 })
 

@@ -57,6 +57,8 @@
       "subtitle": "Pick the chain where you hold USDC. Balance is checked before you can sign.",
       "balance_label": "balance: {{amount}} USDC",
       "balance_loading": "checking...",
+      "insufficient_balance": "Not enough USDC on {{chain}}",
+      "faucet_button": "Faucet",
       "default_payer_name": "you",
       "cancel": "Cancel",
       "sign_button": "Sign depositForBurn"
@@ -147,6 +149,7 @@
     "page_title_id": "Bill #{{id}} — Sabi",
     "extra_received_note": "{{amount}} USDC contributed off the standard amount",
     "share_list_title": "Share list",
+    "share_list_loading": "Loading share list...",
     "assigned_hint": "Green check = has a real tx hash on Arc",
     "openslot_hint": "Anyone can contribute — updates live on-chain",
     "no_contributions": "No contributions yet.",

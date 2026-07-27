@@ -3,12 +3,14 @@ import { useAccount, useReadContract, useReadContracts, useWriteContract, useWai
 import type { NextPage, GetServerSideProps } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'next-i18next'
 import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
-import { formatUnits, HttpRequestError } from 'viem'
+import { formatUnits } from 'viem'
 import { sepolia } from 'wagmi/chains'
-import { SABI_BILL_ADDRESS, SABI_BILL_DEPLOY_BLOCK, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
+import { scanEventLogs } from '../../lib/eventScan'
+import { rpcRetryQueryOptions } from '../../lib/rpcRetry'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
 import { PaymentChainModal } from '../../components/PaymentChainModal'
 import { CrossChainProgressModal } from '../../components/CrossChainProgressModal'
@@ -21,6 +23,7 @@ import { SourceChain } from '../../hooks/useBurnCrossChain'
 import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
+import { useRetryOnPartialFailure } from '../../hooks/useRetryPartialMulticall'
 import type { UserFirestoreData } from '../../lib/firebase'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
@@ -58,21 +61,6 @@ function combinePaidName(
       : t('bill.combined_name', { assigned: assignedName, payer: payerProfileName })
   }
   return assignedName ?? payerProfileName
-}
-
-// RPC public Arc Testnet rate-limit (429) khi nhiều chunk getLogs bắn song
-// song cùng lúc — retry với backoff thay vì để cả danh sách góp tiền/share
-// đã trả rớt trắng chỉ vì 1 chunk bị chặn thoáng qua
-async function withRetry429<T>(fn: () => Promise<T>, retries = 3, delayMs = 600): Promise<T> {
-  try {
-    return await fn()
-  } catch (err) {
-    if (err instanceof HttpRequestError && err.status === 429 && retries > 0) {
-      await new Promise((r) => setTimeout(r, delayMs))
-      return withRetry429(fn, retries - 1, delayMs * 2)
-    }
-    throw err
-  }
 }
 
 const BillDetail: NextPage = () => {
@@ -130,39 +118,13 @@ const BillDetail: NextPage = () => {
     setIsLoadingContributions(true)
     try {
       const latestBlock = await publicClient.getBlockNumber()
-      const CHUNK_SIZE = 5000n//PC Arc Testnet giới hạn số block/lần gọi — quét cả chain 1 lần bị lỗi 413
-      const MAX_CHUNKS = 50 // giới hạn an toàn — không quét quá 100k block về trước, tránh treo nếu chain đã chạy lâu
-
-      // Tính trước toàn bộ khoảng [fromBlock,toBlock] của từng chunk rồi bắn
-      // SONG SONG bằng Promise.all — trước đây await tuần tự từng chunk một,
-      // nếu cần nhiều chunk sẽ cộng dồn độ trễ round-trip (đúng nguyên nhân "hiện chậm").
-      const ranges: { fromBlock: bigint; toBlock: bigint }[] = []
-      let toBlock = latestBlock
-      let chunkCount = 0
-      while (toBlock >= 0n && chunkCount < MAX_CHUNKS) {
-        const rawFrom = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : 0n
-        const fromBlock = rawFrom < SABI_BILL_DEPLOY_BLOCK ? SABI_BILL_DEPLOY_BLOCK : rawFrom
-        ranges.push({ fromBlock, toBlock })
-        chunkCount++
-        if (fromBlock <= SABI_BILL_DEPLOY_BLOCK) break
-        toBlock = fromBlock - 1n
-      }
-
-      const chunkResults = await Promise.all(
-        ranges.map(({ fromBlock, toBlock }) =>
-          withRetry429(() =>
-            publicClient.getContractEvents({
-              address: SABI_BILL_ADDRESS,
-              abi: SABI_BILL_ABI,
-              eventName: 'SlotFilled',
-              args: { billId },
-              fromBlock,
-              toBlock,
-            })
-          )
-        )
+      const allLogs = await scanEventLogs(
+        publicClient,
+        'SlotFilled',
+        { billId },
+        latestBlock,
+        `sabi-scan-SlotFilled-bill-${billId.toString()}`
       )
-      const allLogs = chunkResults.flat()
 
       const list: Contribution[] = allLogs.map((log: any) => ({
         payer: log.args.payer,
@@ -191,36 +153,13 @@ const BillDetail: NextPage = () => {
     if (billId === undefined || !publicClient) return
     try {
       const latestBlock = await publicClient.getBlockNumber()
-      const CHUNK_SIZE = 5000n
-      const MAX_CHUNKS = 50
-
-      const ranges: { fromBlock: bigint; toBlock: bigint }[] = []
-      let toBlock = latestBlock
-      let chunkCount = 0
-      while (toBlock >= 0n && chunkCount < MAX_CHUNKS) {
-        const rawFrom = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : 0n
-        const fromBlock = rawFrom < SABI_BILL_DEPLOY_BLOCK ? SABI_BILL_DEPLOY_BLOCK : rawFrom
-        ranges.push({ fromBlock, toBlock })
-        chunkCount++
-        if (fromBlock <= SABI_BILL_DEPLOY_BLOCK) break
-        toBlock = fromBlock - 1n
-      }
-
-      const chunkResults = await Promise.all(
-        ranges.map(({ fromBlock, toBlock }) =>
-          withRetry429(() =>
-            publicClient.getContractEvents({
-              address: SABI_BILL_ADDRESS,
-              abi: SABI_BILL_ABI,
-              eventName: 'SharePaid',
-              args: { billId },
-              fromBlock,
-              toBlock,
-            })
-          )
-        )
+      const allLogs = await scanEventLogs(
+        publicClient,
+        'SharePaid',
+        { billId },
+        latestBlock,
+        `sabi-scan-SharePaid-bill-${billId.toString()}`
       )
-      const allLogs = chunkResults.flat()
       const payerMap: Record<number, `0x${string}`> = {}
       const hashMap: Record<number, `0x${string}`> = {}
       allLogs.forEach((log: any) => {
@@ -291,6 +230,7 @@ const BillDetail: NextPage = () => {
       enabled: billId !== undefined,
       refetchOnWindowFocus: false,
       staleTime: 30_000,
+      ...rpcRetryQueryOptions,
     },
   })
 
@@ -308,6 +248,7 @@ const BillDetail: NextPage = () => {
       enabled: billId !== undefined && mode === 'ASSIGNED',
       refetchOnWindowFocus: false,
       staleTime: 30_000,
+      ...rpcRetryQueryOptions,
     },
   })
 
@@ -340,10 +281,21 @@ const BillDetail: NextPage = () => {
     }
     const rawTitle = localStorage.getItem(`sabi-bill-${billId.toString()}-title`)
     if (rawTitle) setBillTitle(rawTitle)
-
-    fetchContributions()
-    fetchSharePayers()
   }, [billId])
+
+  // Chỉ quét đúng loại event khớp mode của bill — trước đây gọi cả 2 hàm bất
+  // kể mode, ASSIGNED vẫn quét SlotFilled (event của OPEN_SLOT, không bao giờ
+  // khớp billId), tốn gấp đôi số request lên cùng 1 RPC rate-limit chặt,
+  // khiến các request cần thiết khác (đọc share) cũng bị 429 lây theo.
+  useEffect(() => {
+    if (billId === undefined || mode === undefined) return
+    if (mode === 'OPEN_SLOT') {
+      fetchContributions()
+    } else {
+      fetchSharePayers()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billId, mode])
     // Khôi phục share đang xử lý dở sau khi F5 — quét localStorage tìm giao dịch cross-chain chưa xong
     useEffect(() => {
       if (billId === undefined) return
@@ -371,6 +323,7 @@ const BillDetail: NextPage = () => {
       enabled: !!connectedAddress,
       refetchOnWindowFocus: false,
       staleTime: 15_000,
+      ...rpcRetryQueryOptions,
     },
   })
 
@@ -1018,8 +971,27 @@ function AssignedShares({
       enabled: shareCount > 0,
       refetchOnWindowFocus: false,
       staleTime: 30_000,
+      ...rpcRetryQueryOptions,
     },
   })
+
+  // allowFailure:true (mặc định) khiến 1 phần tử lỗi trong multicall không làm
+  // query báo lỗi tổng thể — rpcRetryQueryOptions ở trên không kích hoạt được
+  // cho trường hợp này, phải tự phát hiện + refetch riêng.
+  useRetryOnPartialFailure(sharesData, refetchAllShares)
+
+  // Mỗi lần retry ở trên thành công thêm 1 share, danh sách render dần dần
+  // (2 → 3 → 4 người), nhìn giật/không đồng bộ. Đợi cho TỚI KHI đủ toàn bộ
+  // rồi mới hiện 1 lần — có deadline 8s để không treo mãi nếu 1 share nào đó
+  // lỗi thật (không phải rate-limit), lúc đó vẫn hiện phần đã có.
+  const allSharesLoaded = sharesData !== undefined && sharesData.every((r) => r.status === 'success')
+  const [forceShowPartial, setForceShowPartial] = useState(false)
+  useEffect(() => {
+    setForceShowPartial(false)
+    const timer = setTimeout(() => setForceShowPartial(true), 8000)
+    return () => clearTimeout(timer)
+  }, [billId])
+  const readyToRender = allSharesLoaded || forceShowPartial
 
   // Phân trang danh sách share — 10 phần/trang, quá 10 chuyển trang, giống
   // hệt danh sách người góp bên OPEN_SLOT (OpenSlotInfo)
@@ -1028,6 +1000,14 @@ function AssignedShares({
   const totalSharePages = Math.max(1, Math.ceil(shareIds.length / SHARE_PAGE_SIZE))
   const currentSharePage = Math.min(sharePage, totalSharePages - 1)
   const visibleShareIds = shareIds.slice(currentSharePage * SHARE_PAGE_SIZE, currentSharePage * SHARE_PAGE_SIZE + SHARE_PAGE_SIZE)
+
+  if (!readyToRender) {
+    return (
+      <p style={{ fontSize: 12.5, color: colors.textSecondary, padding: '8px 0' }}>
+        {t('bill.share_list_loading')}
+      </p>
+    )
+  }
 
   return (
     <div>
@@ -1191,14 +1171,20 @@ function ShareRow({
   // chuyển sang Modal 3, giống hệt choreography trong prototype.
   const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | undefined>(undefined)
   const [holdProgressModal, setHoldProgressModal] = useState(false)
+  // successStartedRef chặn chạy lại lần 2 (KHÔNG phải để huỷ timer) — timer
+  // KHÔNG được đặt trong cleanup của effect phụ thuộc ccState.status, vì effect
+  // reset ccState về 'idle' ở nơi khác sẽ khiến effect này chạy lại và tự huỷ
+  // timer đang chờ trước khi kịp bắn (đúng bug làm modal success không bao giờ hiện).
+  const successStartedRef = useRef(false)
   useEffect(() => {
-    if (ccState.status === 'success' && ccState.relayTxHash) {
+    if (ccState.status === 'success' && ccState.relayTxHash && !successStartedRef.current) {
+      successStartedRef.current = true
       setHoldProgressModal(true)
-      const timer = setTimeout(() => {
-        setSuccessTxHash(ccState.relayTxHash)
+      const capturedHash = ccState.relayTxHash
+      setTimeout(() => {
+        setSuccessTxHash(capturedHash)
         setHoldProgressModal(false)
       }, 700)
-      return () => clearTimeout(timer)
     }
   }, [ccState.status, ccState.relayTxHash])
 
@@ -1542,14 +1528,20 @@ function OpenSlotInfo({
   // mờ dần trước khi chuyển sang Modal 3 — xem ShareRow ở trên cho lý do đầy đủ.
   const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | undefined>(undefined)
   const [holdProgressModal, setHoldProgressModal] = useState(false)
+  // successStartedRef chặn chạy lại lần 2 (KHÔNG phải để huỷ timer) — timer
+  // KHÔNG được đặt trong cleanup của effect phụ thuộc ccState.status, vì effect
+  // reset ccState về 'idle' ở nơi khác sẽ khiến effect này chạy lại và tự huỷ
+  // timer đang chờ trước khi kịp bắn (đúng bug làm modal success không bao giờ hiện).
+  const successStartedRef = useRef(false)
   useEffect(() => {
-    if (ccState.status === 'success' && ccState.relayTxHash) {
+    if (ccState.status === 'success' && ccState.relayTxHash && !successStartedRef.current) {
+      successStartedRef.current = true
       setHoldProgressModal(true)
-      const timer = setTimeout(() => {
-        setSuccessTxHash(ccState.relayTxHash)
+      const capturedHash = ccState.relayTxHash
+      setTimeout(() => {
+        setSuccessTxHash(capturedHash)
         setHoldProgressModal(false)
       }, 700)
-      return () => clearTimeout(timer)
     }
   }, [ccState.status, ccState.relayTxHash])
 

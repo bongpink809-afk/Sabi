@@ -1,11 +1,11 @@
-import { Html, Head, Main, NextScript } from 'next/document'
+import Document, { Html, Head, Main, NextScript, DocumentContext, DocumentInitialProps } from 'next/document'
 
 // _document.tsx phải có meta viewport với width=device-width,initial-scale=1
 // — thiếu dòng này browser mobile "giả lập" viewport rộng ~980px, khiến
 // mọi media query max-width không bao giờ trigger trên điện thoại thật.
-export default function Document() {
+export default function MyDocument({ locale }: DocumentInitialProps & { locale: string }) {
   return (
-    <Html lang="vi">
+    <Html lang={locale}>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png" />
@@ -22,4 +22,11 @@ export default function Document() {
       </body>
     </Html>
   )
+}
+
+// Lấy locale thật của request (en/vi) để đặt đúng lang trên thẻ <html> —
+// trước đây hardcode "vi", sai với trang đang hiển thị tiếng Anh (defaultLocale).
+MyDocument.getInitialProps = async (ctx: DocumentContext): Promise<DocumentInitialProps & { locale: string }> => {
+  const initialProps = await Document.getInitialProps(ctx)
+  return { ...initialProps, locale: ctx.locale ?? 'en' }
 }

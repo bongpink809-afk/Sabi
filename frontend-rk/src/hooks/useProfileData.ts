@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { usePublicClient, useReadContracts } from 'wagmi'
-import { HttpRequestError } from 'viem'
-import { SABI_BILL_ADDRESS, SABI_BILL_ABI, SABI_BILL_DEPLOY_BLOCK } from '../lib/contracts'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
+import { scanEventLogs } from '../lib/eventScan'
+import { rpcRetryQueryOptions } from '../lib/rpcRetry'
+import { useRetryOnPartialFailure } from './useRetryPartialMulticall'
 import { arcTestnet } from '../wagmi'
 
 export interface CreatedBill {
@@ -31,77 +33,26 @@ interface ProfileData {
   isLoading: boolean
 }
 
-// Cùng kiểu quét theo chunk đã dùng ở bill/[id].tsx — Arc Testnet giới hạn
-// số block/lần gọi getLogs, quét cả chain 1 lần bị lỗi 413.
-const CHUNK_SIZE = 5000n
-const MAX_CHUNKS = 50
-
-// RPC public Arc Testnet rate-limit (429) khi nhiều chunk getLogs bắn song
-// song cùng lúc — retry với backoff, giống bill/[id].tsx
-async function withRetry429<T>(fn: () => Promise<T>, retries = 3, delayMs = 600): Promise<T> {
-  try {
-    return await fn()
-  } catch (err) {
-    if (err instanceof HttpRequestError && err.status === 429 && retries > 0) {
-      await new Promise((r) => setTimeout(r, delayMs))
-      return withRetry429(fn, retries - 1, delayMs * 2)
-    }
-    throw err
-  }
-}
-
-async function scanLogs(
-  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
-  eventName: 'BillCreated' | 'SharePaid' | 'SlotFilled',
-  args: Record<string, unknown> | undefined,
-  latestBlock: bigint
-): Promise<any[]> {
-  // Tính trước toàn bộ khoảng [fromBlock,toBlock] của từng chunk rồi bắn SONG
-  // SONG bằng Promise.all — trước đây await tuần tự từng chunk một, tới 50
-  // chunk/event cộng dồn round-trip khiến Hồ sơ tải ~15-20s dù không hề dính 429.
-  const ranges: { fromBlock: bigint; toBlock: bigint }[] = []
-  let toBlock = latestBlock
-  let chunkCount = 0
-  while (toBlock >= 0n && chunkCount < MAX_CHUNKS) {
-    const rawFrom = toBlock > CHUNK_SIZE ? toBlock - CHUNK_SIZE + 1n : 0n
-    const fromBlock = rawFrom < SABI_BILL_DEPLOY_BLOCK ? SABI_BILL_DEPLOY_BLOCK : rawFrom
-    ranges.push({ fromBlock, toBlock })
-    chunkCount++
-    if (fromBlock <= SABI_BILL_DEPLOY_BLOCK) break
-    toBlock = fromBlock - 1n
-  }
-
-  const chunkResults = await Promise.all(
-    ranges.map(({ fromBlock, toBlock }) =>
-      withRetry429(() =>
-        publicClient.getContractEvents({
-          address: SABI_BILL_ADDRESS,
-          abi: SABI_BILL_ABI,
-          eventName,
-          args,
-          fromBlock,
-          toBlock,
-        })
-      )
-    )
-  )
-  return chunkResults.flat()
-}
-
 async function fetchProfileData(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   address: `0x${string}`
 ) {
   const latestBlock = await publicClient.getBlockNumber()
 
-  // Cả 3 event quét song song (trước đây BillCreated quét xong mới quét tiếp
-  // 2 event kia — gộp thành 1 Promise.all giảm gần nửa thời gian chờ thật).
+  // 3 event quét song song trở lại — withGlobalConcurrency() ở scanLogs() đã
+  // giới hạn tổng số request đồng thời lên RPC qua 1 semaphore DÙNG CHUNG,
+  // nên chạy song song ở đây không còn làm tổng tải vượt ngưỡng như trước
+  // (lúc đó mỗi scanLogs tự giới hạn riêng, cộng dồn 3x khi chạy cùng lúc).
   // organizer CÓ indexed trong BillCreated → lọc qua topics; payer KHÔNG indexed
   // trong SharePaid/SlotFilled → phải quét hết rồi tự so địa chỉ ở client.
+  // Cache key: BillCreated lọc theo organizer nên phải riêng theo địa chỉ ví;
+  // SharePaid/SlotFilled quét KHÔNG lọc (payer không indexed) nên dùng chung 1
+  // key cho mọi ví trên cùng trình duyệt — dữ liệu on-chain vốn giống nhau.
+  const addressKey = address.toLowerCase()
   const [createdLogs, shareLogs, slotLogs] = await Promise.all([
-    scanLogs(publicClient, 'BillCreated', { organizer: address }, latestBlock),
-    scanLogs(publicClient, 'SharePaid', undefined, latestBlock),
-    scanLogs(publicClient, 'SlotFilled', undefined, latestBlock),
+    scanEventLogs(publicClient, 'BillCreated', { organizer: address }, latestBlock, `sabi-scan-BillCreated-${addressKey}`),
+    scanEventLogs(publicClient, 'SharePaid', undefined, latestBlock, 'sabi-scan-SharePaid'),
+    scanEventLogs(publicClient, 'SlotFilled', undefined, latestBlock, 'sabi-scan-SlotFilled'),
   ])
 
   // Sort mới nhất trước — dùng blockNumber vì thứ tự log trả về giữa các chunk
@@ -180,10 +131,15 @@ export function useBillsProgress(
     { address: SABI_BILL_ADDRESS, abi: SABI_BILL_ABI, functionName: 'shareCount', args: [id], chainId: arcTestnet.id } as const,
   ])
 
-  const { data } = useReadContracts({
+  const { data, refetch } = useReadContracts({
     contracts,
-    query: { enabled: billIds.length > 0 },
+    query: { enabled: billIds.length > 0, ...rpcRetryQueryOptions },
   })
+
+  // allowFailure:true (mặc định) khiến 1 phần tử lỗi trong multicall không làm
+  // query báo lỗi tổng thể — rpcRetryQueryOptions ở trên không kích hoạt được
+  // cho trường hợp này, phải tự phát hiện + refetch riêng.
+  useRetryOnPartialFailure(data, refetch)
 
   const result: Record<string, BillProgress> = {}
   billIds.forEach((id, i) => {
