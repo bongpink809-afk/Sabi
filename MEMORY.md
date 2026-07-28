@@ -10,7 +10,21 @@ Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer).
 - **Phase 5 (multi-chain)** và một phần **Phase 6 (resume pending)**: có code chạy thật dù chưa từng được đánh dấu "xong" chính thức — cross-chain hỗ trợ 3 chain nguồn (Base/Arbitrum/Ethereum Sepolia), state cross-chain persist qua `localStorage` nên đóng tab giữa chừng vẫn resume được (`useCrossChainPayment.ts`).
 - Chi tiết đầy đủ + phần cập nhật mới nhất: xem `memory/project_sabi_phase1.md` (file trong repo này, KHÔNG phải link ngoài git).
 
-## Cập nhật mới nhất (session đổi route landing/create + điều tra bug Profile/Bill detail)
+## Cập nhật mới nhất (session Circle email login + fix bug retry mạng)
+
+**Đã làm (frontend-rk only, không đụng contract):**
+
+- **Tính năng "Sign in with email" (Circle User-Controlled Wallets) — xây xong, đang TẠM DỪNG qua feature flag** (commit `8b2cde4`): 5 API route `pages/api/circle/*`, `contexts/CircleWalletContext.tsx`, `components/CircleLoginModal.tsx`, nút trigger trong `SabiHeader.tsx`, nhánh `isCircleActive` trong `bill/[id].tsx` + `PaymentArcModal.tsx`, mapping `emailWallets` trong `lib/firebase.ts`. Chỉ hỗ trợ trả trực tiếp trên Arc (approve/payShare/paySlot) — KHÔNG cross-chain, vì đã verify (raw `.d.ts` + raw OpenAPI JSON của Circle) rằng SDK Circle không expose EIP-1193 provider nên không dùng chung được với wagmi's `useWriteContract`; phải qua model challenge+execute riêng của Circle.
+  - Bug thật tìm được lúc test (không phải bug code): gọi thẳng API Circle thấy lỗi `{"code":155159,"message":"Failed to auth to the SMTP server..."}` — lỗi cấu hình SMTP Mailtrap Sandbox trong Circle Console, không phải lỗi repo.
+  - Chủ dự án quyết định **tạm dừng**: comment `NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true` trong `.env.local` (gitignore, không có trong git) — không xoá code. Verify: nút biến mất (SSR HTML), build sạch, `isCircleActive` luôn `false` khi tắt (xác nhận bằng đọc code, không đoán).
+  - Việc còn treo lại NẾU bật lại sau này: xác nhận field tx hash thật trong `transaction-status.ts` (cần chạy 1 challenge `contractExecution` thật, log response).
+- **Fix bug retry mạng, liên quan trực tiếp bug bill 36** (commit `0ead92b`): user báo lỗi `HTTP request failed... Details: Failed to fetch` khi quét `eth_getLogs`. Verify bằng `curl` gọi lại đúng request → RPC trả 200 OK bình thường (không phải RPC down). Đọc source `viem/utils/rpc/http.ts` xác nhận: khi `fetch()` tự throw (mất mạng thoáng qua), viem bọc thành `HttpRequestError` nhưng KHÔNG có `status` — `withRetry429()` (`eventScan.ts`) và `isRateLimited()` (`rpcRetry.ts`) trước đó chỉ retry `status === 429` nên loại lỗi này rớt thẳng, không thử lại. Đã sửa cả 2 file retry thêm `status === undefined`. **Nhiều khả năng đây mới là nguyên nhân thật của bug bill 36** (Profile không hiện bill vừa trả) — thay thế giả thuyết "MAX_CHUNKS cache cap" chưa verify trực tiếp ở update trước. Chủ dự án xác nhận coi bill 36 là đã fix qua hướng này.
+- Giả thuyết `MAX_CHUNKS` cache cap trong `eventScan.ts` (xem mục dưới) vẫn còn tồn tại lý thuyết, chưa fix — ưu tiên thấp sau khi bug retry mạng đã sửa.
+- Trạng thái push: commit `8b2cde4` và `0ead92b` — kiểm tra `git log origin/main..HEAD` để biết chắc đã push chưa lúc đọc lại.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session đổi route landing/create + điều tra bug Profile/Bill detail)
 
 **Đã làm (frontend-rk only, không đụng contract):**
 

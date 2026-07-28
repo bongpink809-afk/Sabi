@@ -119,3 +119,34 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 - Ghi nhận riêng (không phải bug, không cần sửa): `NEXT_PUBLIC_SABI_BILL_ADDRESS` trong `frontend-rk/.env.local` (`0xFbb7765FC0150C5D41bF85EedEb4a45747884Ce5`) khác với `SABI_BILL_ADDRESS` hardcode trong `lib/contracts.ts` (`0x192963eBcC9f39C0057597CF3AA7d97c99a83c75`, contract đang thật sự dùng) — biến env đó chết/không được đọc ở đâu cả, là rác còn sót lại từ lần deploy trước. Chưa xoá vì không được yêu cầu, chỉ ghi nhận.
 
 **How to apply:** Trước khi sửa `eventScan.ts`, đọc kỹ comment trong `logCache.ts` — thiết kế "lần đầu chỉ quét window gần nhất, sau đó tích luỹ dần" là CHỦ Ý (tránh quá tải RPC public khi quét full ~3.75 triệu block lịch sử kể từ lúc deploy), không phải sơ suất — chỉ nới giới hạn cho nhánh "đã có cache, đang bắt kịp", không đổi nhánh "quét nguội lần đầu".
+
+---
+
+## Cập nhật (session sau — thử build tính năng Circle email login, tạm dừng; fix bug retry mạng liên quan bill #36)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+**1. Tính năng "Sign in with email" (Circle User-Controlled Wallets) — ĐÃ XÂY XONG, đang TẠM DỪNG qua feature flag:**
+
+- Handoff ban đầu giả định sai: "gán địa chỉ ví Circle vào chỗ đang lưu địa chỉ hiện tại là `payCrossChain` dùng được luôn". Đã verify bằng raw source `.d.ts` thật của `@circle-fin/w3s-pw-web-sdk` + raw OpenAPI JSON của Circle (không đoán từ tóm tắt AI — agent nghiên cứu ban đầu bắt được AI-summarizer bịa nội dung 2 lần): **Circle SDK không expose EIP-1193 provider**, wagmi's `useWriteContract` không dùng được trực tiếp. Circle dùng model riêng: backend tạo "challenge" qua REST (`POST /v1/w3s/user/transactions/contractExecution`), frontend gọi `sdk.execute(challengeId)` để user xác nhận PIN.
+- Đã chốt scope v1 với chủ dự án: ví Circle **chỉ trả trực tiếp trên Arc** (approve/payShare/paySlot), KHÔNG hỗ trợ cross-chain (payCrossChain) — vẫn cần MetaMask cho cross-chain.
+- Đã xây xong (commit `8b2cde4`): 5 API route `pages/api/circle/*` (login-init, wallets, wallets/initialize, contract-execution, transaction-status), `contexts/CircleWalletContext.tsx` (`useCircleWallet` đăng nhập email + `useCircleContractCall` gọi contract qua Circle, chạy song song wagmi không đụng `wagmi.ts`), `components/CircleLoginModal.tsx`, nút trigger trong `SabiHeader.tsx`, nhánh `isCircleActive` trong `bill/[id].tsx` + `PaymentArcModal.tsx` (thêm prop `payerAddress`, nới điều kiện màn "done"), mapping `emailWallets` trong `lib/firebase.ts`, i18n namespace `circle.*`.
+- Toàn bộ ẩn/hiện qua 1 feature flag `NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN` (đọc trong `SabiHeader.tsx`) — tắt flag thì `isCircleActive` không bao giờ `true` được (chỉ đổi qua `startEmailLogin()`, hàm này chỉ gọi được từ UI đã bị ẩn), nên toàn bộ luồng wagmi/MetaMask không đổi hành vi khi tắt.
+- **Bug thật tìm được lúc test (không phải bug code):** Circle Console báo lỗi khi gửi OTP — verify bằng cách gọi thẳng API Circle (không qua route của mình): `{"code":155159,"message":"Failed to auth to the SMTP server. Please check SMTP setting."}` — lỗi cấu hình SMTP (Mailtrap Sandbox) trong Circle Console → Configurator → Authentication Methods → Email, không phải lỗi trong repo.
+- **Chủ dự án quyết định TẠM DỪNG** (không tiếp tục làm nốt phần verify tx-hash field, không chuyển SMTP sang production; không xoá code, không cần đụng Circle Console/Mailtrap). Đã comment `NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true` thành `# NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true` trong `.env.local` (file này gitignore, không có trong git). Verify lại: nút biến mất khỏi header (SSR HTML), `npm run build` sạch, `isCircleActive` luôn `false` bằng đọc code trực tiếp.
+- Toàn bộ tính năng gộp thành **1 commit duy nhất** `8b2cde4` (vì trước đó chưa từng commit lúc "bật" — không có state "on" nào trong git để tách riêng commit "tắt", và bản thân flag nằm trong `.env.local` nên không hiện trong git history được).
+- **Việc còn treo lại DUY NHẤT nếu bật lại sau này:** xác nhận field tx hash thật trong `pages/api/circle/transaction-status.ts` — cần chạy 1 challenge `contractExecution` thật với sandbox Circle, log raw response, xem field `state`/`txHash` tên gì rồi mới chốt mapping (hiện đang đoán field name, đã ghi rõ TODO trong code).
+- Chưa test tay được flow thật (gửi OTP sau khi sửa SMTP, tạo ví, trả bill qua Circle) — môi trường không có Playwright/ví thật, và SMTP đang lỗi nên chưa gửi OTP thật được dù muốn test.
+
+**2. Fix bug retry mạng — liên quan trực tiếp tới bug bill 36 đã note ở update trước (commit `0ead92b`):**
+
+- User báo lỗi thật: `HTTP request failed... Details: Failed to fetch... viem@2.38.0` khi quét `eth_getLogs` (SlotFilled, billId=31).
+- Verify (không đoán): gọi lại ĐÚNG request đó bằng `curl` trực tiếp tới `https://rpc.testnet.arc.network` → RPC trả `200 OK` bình thường trong 0.49s — xác nhận RPC không down.
+- Đọc thẳng source `node_modules/viem/utils/rpc/http.ts`: khi `fetch()` của trình duyệt tự throw (mất mạng/RPC không phản hồi tạm thời — KHÔNG phải lỗi HTTP thật), viem vẫn bọc thành `HttpRequestError` nhưng **không có `status`** (chưa nhận được response nào để đọc). `withRetry429()` trong `eventScan.ts` và `isRateLimited()` trong `rpcRetry.ts` trước đó CHỈ retry khi `status === 429`, nên loại lỗi mạng thoáng qua này rớt thẳng, không thử lại lần nào.
+- Đã sửa cả 2 file: retry thêm cả trường hợp `status === undefined`, giữ nguyên số lần retry (5) + backoff cũ (không retry vô hạn).
+- **Nhiều khả năng đây mới là nguyên nhân THẬT của bug bill 36** (Profile không hiện bill vừa trả, phải reload vài lần) đã note ở update trước — thay thế giả thuyết "`MAX_CHUNKS` cache cap" (chưa từng verify trực tiếp, chỉ đọc code suy luận). Chủ dự án đã xác nhận coi bill 36 là fix qua hướng này.
+- Giả thuyết `MAX_CHUNKS` cache cap trong `eventScan.ts` (xem update trước) **vẫn còn tồn tại về lý thuyết, chưa fix** — nhưng ưu tiên thấp hơn nhiều sau khi bug retry mạng đã sửa. Chỉ cần xem lại nếu "profile không hiện bill mới trả" tái diễn SAU commit `0ead92b`.
+
+**Trạng thái push (tính đến cuối session này):** commit `8b2cde4` và `0ead92b` — kiểm tra `git log origin/main..HEAD` lúc đọc lại file này để biết chắc đã push hay chưa.
+
+**How to apply:** Nếu chủ dự án muốn bật lại Circle email login, chỉ cần đổi `NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true` trong `.env.local` (đảm bảo SMTP Circle Console đã sửa xong trước), rồi làm nốt phần verify tx-hash field trong `transaction-status.ts`. Nếu chủ dự án lại báo bug hiển thị Profile/bill tương tự bill 36, **không điều tra lại từ đầu** — kiểm tra trước xem có phải lỗi mạng thoáng qua kiểu "Failed to fetch" hay không (đã có retry rồi nên ít khả năng, nhưng vẫn còn giả thuyết `MAX_CHUNKS` treo lại).
