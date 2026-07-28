@@ -91,3 +91,31 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 - `bc5acd0` — Update copy: allow_usdc label (chỉnh tay bởi chủ dự án, không phải do session này — nội dung EN hiện ghi "Aprove USDC", có thể là lỗi gõ thiếu chữ "p", đã báo cho chủ dự án, chưa tự sửa vì không được yêu cầu)
 
 **How to apply:** Trước khi động vào `frontend-rk/src/hooks/useCrossChainPayment.ts` hoặc `useBurnCrossChain.ts`, đọc kỹ comment trong đó — nhiều quyết định (gas buffer 50%, timeout 45s cho burn, phân biệt `attestation_delayed` với lỗi thật) đã có lý do cụ thể ghi sẵn, đừng đổi mà không hiểu tại sao.
+
+---
+
+## Cập nhật (session sau — đổi route landing/create, điều tra bug hiển thị Profile/Bill detail)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry, không có bằng chứng mới về integration test Base Sepolia → Arc mà Phase 1 còn treo.
+
+**Việc đã làm xong (đã commit hay chưa commit — xem log lúc đọc lại file này để biết chắc):**
+
+1. **Đổi route landing/create:** trước đó landing nằm ở `/landing`, `/` là trang tạo bill. Theo yêu cầu chốt mới (deadline 9/8), đảo lại: `/` = landing (`pages/index.tsx`, nội dung y hệt `pages/landing.tsx` cũ, dùng `git mv` giữ history), `/create` = trang tạo bill (`pages/create.tsx`, nội dung y hệt `pages/index.tsx` cũ). Đã sửa mọi chỗ trỏ cứng `href="/"`/`pathname === '/'` với ý nghĩa "vào trang tạo bill" sang `/create` — cụ thể: logo link, tab "Tạo bill", check `isHome` trong `SabiHeader.tsx`, và CTA "Create a bill" trong landing.
+   - Link chia sẻ bill (`/bill/[id]`, dùng `window.location.origin`) và `next.config.js` không phụ thuộc route `/` — không cần sửa gì.
+   - Landing page KHÔNG có i18n (`useTranslation`/`getServerSideProps`) — hardcode tiếng Anh từ trước, không phải do session này gây ra, nên đổi ngôn ngữ VI/EN sẽ không có tác dụng gì ở `/`. Đã báo cho chủ dự án.
+   - Verify: `npm run build` pass, route table đúng (`/`, `/create`, `/bill`, `/bill/[id]`, `/profile`). Không có `chromium-cli`/Playwright trong môi trường này (không tự cài vì cần tải browser binary) — verify thay bằng dev server thật + `curl` đọc SSR HTML, xác nhận đúng nội dung/href ở cả 2 route. **Chưa test bằng browser thật/tương tác tay** — phần connect ví MetaMask thật ở `/create` chủ dự án cần tự kiểm tra.
+
+2. **Điều tra bug user báo (bill 36) — CHỈ ĐIỀU TRA, CHƯA SỬA CODE:**
+   - Triệu chứng 1: "Đã trả" ở `/profile` không hiện bill 36 dù đã trả thật.
+   - Triệu chứng 2: ở chi tiết bill, share "Linh Gấu" chỉ hiện "Linh Gấu", không hiện "(Jack trả)".
+   - Verify bằng `cast call`/`cast logs` thẳng trên Arc Testnet RPC (không đoán): `getShare(36,7)` và `getShare(36,8)` đều `paid=true` — tiền đã ghi nhận đúng on-chain, không mất. Payer share 8 ("Linh Gấu") = `0x262e6a7C7b53B968075831FFd03858361296D280`, gọi trực tiếp `payShare` (không phải cross-chain).
+   - Verify Firestore REST (`sabi1-f8fe0`, project ID + API key lấy từ `.env.local`, đều là biến `NEXT_PUBLIC_*` nên vốn đã public trong bundle client, không phải rò rỉ secret): ví đó tự đặt `profileName = "Linh Gấu"` (Firestore `users/{addr}`, update lúc 2026-07-28 06:16:44 UTC) — **trùng tên với share được gán sẵn**. `combinePaidName()` trong `bill/[id].tsx` cố tình ẩn "(X trả)" khi 2 tên trùng (tránh "Linh Gấu (Linh Gấu trả)") — **đây KHÔNG phải bug, đúng thiết kế**. Query Firestore toàn collection `users` tìm `profileName == "Jack"` → không có kết quả — không tồn tại hồ sơ nào tên "Jack". Muốn hiện "(Jack trả)", ví đó phải tự đổi tên hồ sơ ở `/profile`.
+   - Triệu chứng 1 (Profile không hiện bill 36): **chưa xác nhận chắc chắn nguyên nhân**, nhưng có nghi ngờ có căn cứ — `eventScan.ts` cache log theo `localStorage` (key `sabi-scan-SharePaid`, dùng CHUNG mọi ví), giới hạn cứng `MAX_CHUNKS=8 × CHUNK_SIZE=5000 = 40.000 block` mỗi lần tải trang **kể cả khi đang "bắt kịp" (catch-up) từ cache cũ, không chỉ lần quét nguội đầu tiên**. Nếu cache đã tụt hậu hơn 40k block so với block mới nhất, phải tải `/profile` thêm 1-2 lần mới quét tới block chứa giao dịch mới trả (block của share 8 chỉ cách block mới nhất lúc kiểm tra ~805 block — nên đáng lẽ 1 lần tải là đủ NẾU cache đã cập nhật gần đây). Đã đề nghị chủ dự án reload `/profile` vài lần để xác nhận trước khi sửa code — **CHƯA làm gì với `eventScan.ts` vì chưa có xác nhận, tránh sửa mù**.
+
+**Việc còn pending / TODO chưa chốt:**
+
+- Chờ chủ dự án xác nhận: reload `/profile` có làm bill 36 hiện ra không → nếu có, sửa `eventScan.ts` (bỏ giới hạn `MAX_CHUNKS` cứng cho nhánh catch-up khi ĐÃ có cache, chỉ giữ giới hạn đó cho lần quét nguội đầu tiên — tránh quá tải RPC public). Nếu vẫn không hiện sau reload, cần điều tra thêm hướng khác (vd sai ví đang connect).
+- Test tay bằng browser thật cho checklist đổi route (đặc biệt connect ví ở `/create`, đổi VI/EN) — chưa làm được trong session này vì môi trường không có Playwright/chromium-cli.
+- Ghi nhận riêng (không phải bug, không cần sửa): `NEXT_PUBLIC_SABI_BILL_ADDRESS` trong `frontend-rk/.env.local` (`0xFbb7765FC0150C5D41bF85EedEb4a45747884Ce5`) khác với `SABI_BILL_ADDRESS` hardcode trong `lib/contracts.ts` (`0x192963eBcC9f39C0057597CF3AA7d97c99a83c75`, contract đang thật sự dùng) — biến env đó chết/không được đọc ở đâu cả, là rác còn sót lại từ lần deploy trước. Chưa xoá vì không được yêu cầu, chỉ ghi nhận.
+
+**How to apply:** Trước khi sửa `eventScan.ts`, đọc kỹ comment trong `logCache.ts` — thiết kế "lần đầu chỉ quét window gần nhất, sau đó tích luỹ dần" là CHỦ Ý (tránh quá tải RPC public khi quét full ~3.75 triệu block lịch sử kể từ lúc deploy), không phải sơ suất — chỉ nới giới hạn cho nhánh "đã có cache, đang bắt kịp", không đổi nhánh "quét nguội lần đầu".

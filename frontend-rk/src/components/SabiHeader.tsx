@@ -16,14 +16,14 @@ const GAS_FAUCET_LINKS = [
 
 const LAST_BILL_ID_KEY = 'sabi-last-bill-id'
 
-// Lưu billId gần nhất đã tạo/xem — để tab "Chi tiết bill" ở trang / và /profile
+// Lưu billId gần nhất đã tạo/xem — để tab "Chi tiết bill" ở trang /create và /profile
 // có chỗ để trỏ tới (thay vì biến mất khi không đứng trên trang /bill/[id]).
 export function rememberLastBillId(billId: string) {
   if (typeof window === 'undefined') return
   localStorage.setItem(LAST_BILL_ID_KEY, billId)
 }
 
-// Header + tab-bar dùng chung cho cả 3 trang thật (/, /bill/[id] hoặc /bill, /profile) —
+// Header + tab-bar dùng chung cho cả 3 trang thật (/create, /bill/[id] hoặc /bill, /profile) —
 // đúng cấu trúc sabi-ui-prototype-v8.html: thanh trắng (logo + ví) TÁCH RIÊNG khỏi
 // hàng tab bên dưới (hàng tab nổi trên nền lavender của trang, không dính vào thanh trắng).
 // Tab là link Next.js thật tới 3 route khác nhau — KHÔNG phải state JS gộp 1 trang
@@ -45,7 +45,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
   const billTabHref = billTabId ? `/bill/${billTabId}` : '/bill'
   const billTabLabel = billTabId ? t('nav.bill_detail_id', { id: billTabId }) : t('nav.bill_detail')
 
-  const isHome = router.pathname === '/'
+  const isHome = router.pathname === '/create'
   const isBillDetail = router.pathname === '/bill/[id]' || router.pathname === '/bill'
   const isProfile = router.pathname === '/profile'
 
@@ -65,7 +65,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
           }}
         >
           <div className="sabi-header-brand" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
+            <Link href="/create" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
               <SabiLogo size={34} />
               <strong style={{ fontSize: 20, fontWeight: 800, color: colors.textPrimary }}>Sabi</strong>
             </Link>
@@ -97,7 +97,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
             boxShadow: `0 4px 20px ${colors.shadowColor}`,
           }}
         >
-          <Tab href="/" active={isHome}>
+          <Tab href="/create" active={isHome}>
             {t('nav.create_bill')}
           </Tab>
           <Tab href={billTabHref} active={isBillDetail}>

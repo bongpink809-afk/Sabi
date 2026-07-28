@@ -10,6 +10,23 @@ Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer).
 - **Phase 5 (multi-chain)** và một phần **Phase 6 (resume pending)**: có code chạy thật dù chưa từng được đánh dấu "xong" chính thức — cross-chain hỗ trợ 3 chain nguồn (Base/Arbitrum/Ethereum Sepolia), state cross-chain persist qua `localStorage` nên đóng tab giữa chừng vẫn resume được (`useCrossChainPayment.ts`).
 - Chi tiết đầy đủ + phần cập nhật mới nhất: xem `memory/project_sabi_phase1.md` (file trong repo này, KHÔNG phải link ngoài git).
 
+## Cập nhật mới nhất (session đổi route landing/create + điều tra bug Profile/Bill detail)
+
+**Đã làm (frontend-rk only, không đụng contract):**
+
+- **Đổi route:** `/` giờ là landing page (trước đó ở `/landing`), `/create` là trang tạo bill (trước đó ở `/`) — theo yêu cầu chốt, deadline 9/8. Dùng `git mv` giữ history: `pages/landing.tsx` → `pages/index.tsx`, `pages/index.tsx` (cũ) → `pages/create.tsx`. Sửa mọi `href="/"`/`pathname === '/'` mang ý nghĩa "vào trang tạo bill" sang `/create`: logo + tab "Tạo bill" + check `isHome` trong `SabiHeader.tsx`, CTA "Create a bill" ở landing. Link share bill (`window.location.origin` + `/bill/[id]`) và `next.config.js` không phụ thuộc `/` nên không cần sửa.
+- Verify: `npm run build` pass, route table đúng. Môi trường không có `chromium-cli`/Playwright (không tự cài vì cần tải browser binary) → verify bằng dev server thật + `curl` đọc SSR HTML thay vì browser thật. **Chưa test tay bằng browser** (connect ví MetaMask ở `/create`, đổi VI/EN) — cần chủ dự án tự kiểm tra.
+- Landing page không có i18n (hardcode tiếng Anh từ trước, không phải do session này) — đổi VI/EN sẽ không có tác dụng ở `/`, đã báo cho chủ dự án.
+
+**Điều tra bug user báo ở bill 36 (CHỈ điều tra bằng `cast`/Firestore REST thật, CHƯA sửa code):**
+
+- Cả 2 share đã trả của bill 36 (share 7 "Bông", share 8 "Linh Gấu") đều `paid=true` on-chain — tiền không mất.
+- "Chi tiết bill chỉ hiện 'Linh Gấu' không hiện '(Jack trả)'": **không phải bug**. Ví đã trả share đó tự đặt `profileName Firestore = "Linh Gấu"` — trùng tên share nên `combinePaidName()` cố tình ẩn "(X trả)" (tránh lặp "Linh Gấu (Linh Gấu trả)", đúng thiết kế). Không tồn tại hồ sơ Firestore nào tên "Jack" — muốn hiện "(Jack trả)" thì ví đó phải tự đổi tên ở `/profile`.
+- "`/profile` không hiện bill 36 trong danh sách đã trả": **chưa xác nhận chắc nguyên nhân**, nghi ngờ có căn cứ là cache quét log (`eventScan.ts`, key `sabi-scan-SharePaid` dùng chung mọi ví) giới hạn cứng 40.000 block/lần tải TRANG kể cả khi đang bắt kịp (catch-up) từ cache cũ, không riêng lần quét nguội đầu — nếu cache tụt hậu hơn 40k block phải tải lại `/profile` thêm 1-2 lần mới thấy giao dịch mới. Đã đề nghị chủ dự án reload thử để xác nhận trước khi sửa `eventScan.ts`, chưa tự sửa vì chưa xác nhận.
+- Ghi nhận riêng, không phải bug: `NEXT_PUBLIC_SABI_BILL_ADDRESS` trong `.env.local` là biến chết (không được code nào đọc) — contract thật dùng hardcode trong `lib/contracts.ts`. Chưa xoá vì không được yêu cầu.
+
+Chi tiết đầy đủ (bao gồm địa chỉ ví, block number, tx hash cụ thể đã tra): xem `memory/project_sabi_phase1.md`.
+
 ## Network config (Arc Testnet)
 
 | Field       | Value                                          |
