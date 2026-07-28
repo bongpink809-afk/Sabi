@@ -19,7 +19,13 @@ async function withRetry429<T>(fn: () => Promise<T>, retries = 5, delayMs = 800)
   try {
     return await fn()
   } catch (err) {
-    if (err instanceof HttpRequestError && err.status === 429 && retries > 0) {
+    // status === 429: rate-limit thật từ RPC. status === undefined: fetch() tự
+    // throw (mất mạng/RPC không phản hồi tạm thời) — viem bọc lại thành
+    // HttpRequestError nhưng KHÔNG có status vì chưa nhận được response nào cả
+    // (xem viem/utils/rpc/http.ts, nhánh catch ngoài cùng). Trước đây chỉ retry
+    // đúng 429 nên loại lỗi mạng thoáng qua này rớt luôn không thử lại.
+    const isRetryable = err instanceof HttpRequestError && (err.status === 429 || err.status === undefined)
+    if (isRetryable && retries > 0) {
       await new Promise((r) => setTimeout(r, delayMs))
       return withRetry429(fn, retries - 1, delayMs * 2)
     }
