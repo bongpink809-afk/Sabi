@@ -15,6 +15,17 @@
   "language": {
     "button": "Language"
   },
+  "circle": {
+    "signin_button": "Sign in with email",
+    "logout_hint": "Sign out of email wallet",
+    "modal_title": "Sign in with email",
+    "modal_subtitle": "We'll send a one-time code to your email — no wallet extension needed.",
+    "email_placeholder": "you@example.com",
+    "waiting_hint": "Follow the popup to enter your code and finish signing in...",
+    "cancel": "Cancel",
+    "submit": "Send code",
+    "submitting": "Please wait..."
+  },
   "crosschain": {
     "default_chain_name": "source chain",
     "checking_balance": "Checking balance...",

@@ -15,6 +15,17 @@
   "language": {
     "button": "Ngôn ngữ"
   },
+  "circle": {
+    "signin_button": "Đăng nhập bằng email",
+    "logout_hint": "Đăng xuất ví email",
+    "modal_title": "Đăng nhập bằng email",
+    "modal_subtitle": "Chúng tôi sẽ gửi mã xác nhận tới email của bạn — không cần cài ví.",
+    "email_placeholder": "email@cua-ban.com",
+    "waiting_hint": "Làm theo popup để nhập mã và hoàn tất đăng nhập...",
+    "cancel": "Huỷ",
+    "submit": "Gửi mã",
+    "submitting": "Đang xử lý..."
+  },
   "crosschain": {
     "default_chain_name": "chain nguồn",
     "checking_balance": "Đang kiểm tra số dư...",

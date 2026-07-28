@@ -16,6 +16,7 @@ import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import { appWithTranslation } from 'next-i18next';
 
 import { config, arcTestnet } from '../wagmi';
+import { CircleWalletProvider } from '../contexts/CircleWalletContext';
 
 // QueryClient với defaultOptions đã tắt refetchOnWindowFocus và gcTime ngắn —
 // ngăn wagmi/react-query tự refetch định kỳ gây layout jump trên mobile mỗi ~1 phút.
@@ -59,8 +60,12 @@ function MyApp({ Component, pageProps }: AppProps) {
     <WagmiProvider config={config}>
       <QueryClientProvider client={client}>
         <RainbowKitProvider>
-          <AutoSwitchToArc />
-          <Component {...pageProps} />
+          {/* CircleWalletProvider chạy song song wagmi, không đụng config/state
+              wagmi — chỉ dùng cho ví đăng nhập bằng email (xem CircleWalletContext.tsx) */}
+          <CircleWalletProvider>
+            <AutoSwitchToArc />
+            <Component {...pageProps} />
+          </CircleWalletProvider>
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

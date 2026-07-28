@@ -5,6 +5,8 @@ import { useTranslation } from 'next-i18next'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { colors } from '../styles/theme'
 import { SabiLogo } from './SabiLogo'
+import { useCircleWallet } from '../contexts/CircleWalletContext'
+import { CircleLoginModal } from './CircleLoginModal'
 
 // Cùng 3 URL đã verify sống bằng WebFetch ở fix C.3 (CrossChainStatus.tsx) —
 // copy nguyên, không gõ lại tay để tránh verify trùng công / gõ sai ký tự.
@@ -78,6 +80,7 @@ export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
               <LocaleSwitcher />
             </div>
             <FaucetMenu />
+            {process.env.NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN === 'true' && <CircleSignInSlot />}
             <ConnectButton />
           </div>
         </div>
@@ -220,6 +223,64 @@ function LocaleSwitcher() {
         </div>
       )}
     </div>
+  )
+}
+
+// Nút "Sign in with email" — chỉ hiện khi NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true
+// (feature flag để rollback về chỉ MetaMask không cần sửa code). Ví Circle chỉ
+// dùng được cho trả trực tiếp trên Arc (xem CircleWalletContext.tsx) — ưu tiên
+// wagmi nếu đã connect MetaMask, đây thuần là UI trigger + hiện trạng thái.
+function CircleSignInSlot() {
+  const { t } = useTranslation('common')
+  const { status, walletAddress, logout } = useCircleWallet()
+  const [showModal, setShowModal] = useState(false)
+
+  if (status === 'ready' && walletAddress) {
+    return (
+      <button
+        onClick={logout}
+        title={t('circle.logout_hint')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '8px 14px',
+          borderRadius: 99,
+          border: `1px solid ${colors.border}`,
+          background: colors.surface,
+          color: colors.textSecondary,
+          fontSize: 13.5,
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        ✉️ {walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}
+      </button>
+    )
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setShowModal(true)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '8px 14px',
+          borderRadius: 99,
+          border: `1px solid ${colors.border}`,
+          background: colors.surface,
+          color: colors.textSecondary,
+          fontSize: 13.5,
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        ✉️ {t('circle.signin_button')}
+      </button>
+      {showModal && <CircleLoginModal onClose={() => setShowModal(false)} />}
+    </>
   )
 }
 

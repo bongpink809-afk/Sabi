@@ -43,6 +43,7 @@ export function PaymentArcModal({
   payTxHash,
   paySuccess,
   payError,
+  payerAddress,
 }: {
   amount: bigint
   payerName: string
@@ -53,9 +54,13 @@ export function PaymentArcModal({
   payTxHash: `0x${string}` | undefined
   paySuccess: boolean
   payError: Error | null
+  // Địa chỉ ví đang trả khi KHÔNG có ví wagmi connect (vd ví Circle đăng nhập
+  // bằng email) — wagmi's useAccount().address vẫn ưu tiên nếu có.
+  payerAddress?: `0x${string}`
 }) {
   const { t } = useTranslation('common')
-  const { address } = useAccount()
+  const { address: wagmiAddress } = useAccount()
+  const address = wagmiAddress ?? payerAddress
 
   const { data: balance } = useReadContract({
     address: ARC_USDC_ADDRESS,
@@ -124,7 +129,10 @@ export function PaymentArcModal({
     []
   )
 
-  if (showDone && payTxHash) {
+  // Ví Circle có thể chưa kịp trả về tx hash (đang poll trạng thái phía
+  // backend) ngay lúc challenge hoàn tất — vẫn cho hiện màn "đã trả xong",
+  // chỉ ẩn link ArcScan nếu chưa có hash thay vì treo mãi màn xử lý.
+  if (showDone && (payTxHash || paySuccess)) {
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(23, 21, 31, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
         <style>{`
@@ -157,14 +165,16 @@ export function PaymentArcModal({
           </div>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: colors.textPrimary }}>{t('paymentModal.success.title')}</h2>
           <p style={{ margin: '8px 0 18px', fontSize: 13, color: colors.textSecondary }}>{t('paymentModal.arc.success_subtitle')}</p>
-          <a
-            href={`https://testnet.arcscan.app/tx/${payTxHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ display: 'inline-block', marginBottom: 20, color: colors.primary, fontSize: 13, textDecoration: 'underline', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
-          >
-            {t('paymentModal.success.arcscan_link', { hash: truncateHash(payTxHash) })}
-          </a>
+          {payTxHash && (
+            <a
+              href={`https://testnet.arcscan.app/tx/${payTxHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: 'inline-block', marginBottom: 20, color: colors.primary, fontSize: 13, textDecoration: 'underline', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+            >
+              {t('paymentModal.success.arcscan_link', { hash: truncateHash(payTxHash) })}
+            </a>
+          )}
           <div>
             <button
               onClick={onClose}

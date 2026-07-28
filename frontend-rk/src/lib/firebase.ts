@@ -59,12 +59,21 @@ function getStorageInstance() {
 //      profileName: string
 //      updatedAt:   timestamp
 //
+//  Collection "emailWallets" (mapping đăng nhập email → ví Circle):
+//    emailWallets/{email}      ← lowercase, dùng luôn làm document ID
+//      walletAddress: string   — lowercase
+//      walletId:      string   — id nội bộ của Circle
+//      updatedAt:     timestamp
+//
 // Security Rules (Firebase Console → Firestore Database → Rules):
 //   match /bills/{billId} {
 //     allow read: if true;       // ai cũng xem được
 //     allow write: if true;      // demo — production nên hạn chế
 //   }
 //   match /users/{userId} {
+//     allow read, write: if true; // demo — production dùng auth
+//   }
+//   match /emailWallets/{email} {
 //     allow read, write: if true; // demo — production dùng auth
 //   }
 
@@ -80,6 +89,12 @@ export interface BillFirestoreData {
 export interface UserFirestoreData {
   profileName?: string
   avatarUrl?: string   // URL Firebase Storage — không lưu base64 thắng vào Firestore
+  updatedAt?: unknown
+}
+
+export interface EmailWalletFirestoreData {
+  walletAddress?: string
+  walletId?: string
   updatedAt?: unknown
 }
 
@@ -270,4 +285,46 @@ export function listenToUserProfile(
       console.warn('[Firebase] listenToUserProfile error:', err)
     }
   )
+}
+
+// ─── API: Email ↔ ví Circle (đăng nhập bằng email) ─────────────────────────
+// Chỉ là mapping tiện ích cho app (vd tra cứu sau này) — KHÔNG nằm trên
+// critical path của luồng đăng nhập/thanh toán, nguồn sự thật vẫn là Circle's
+// GET /v1/w3s/wallets. Lỗi ghi ở đây không được chặn đăng nhập.
+
+/**
+ * Lưu/merge mapping email → ví Circle vừa tạo/tìm thấy.
+ */
+export async function saveEmailWalletMapping(
+  email: string,
+  walletAddress: string,
+  walletId: string
+): Promise<void> {
+  if (typeof window === 'undefined') return
+  if (!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return
+  try {
+    const db = getDb()
+    await setDoc(
+      doc(db, 'emailWallets', email.toLowerCase()),
+      { walletAddress: walletAddress.toLowerCase(), walletId, updatedAt: serverTimestamp() },
+      { merge: true }
+    )
+  } catch (err) {
+    console.warn('[Firebase] saveEmailWalletMapping failed:', err)
+  }
+}
+
+/**
+ * Tra cứu ví Circle đã gắn với 1 email.
+ */
+export async function fetchEmailWallet(email: string): Promise<EmailWalletFirestoreData | null> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return null
+  try {
+    const db = getDb()
+    const snap = await getDoc(doc(db, 'emailWallets', email.toLowerCase()))
+    return snap.exists() ? (snap.data() as EmailWalletFirestoreData) : null
+  } catch (err) {
+    console.warn('[Firebase] fetchEmailWallet failed:', err)
+    return null
+  }
 }

@@ -25,6 +25,7 @@ import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
 import { useRetryOnPartialFailure } from '../../hooks/useRetryPartialMulticall'
 import type { UserFirestoreData } from '../../lib/firebase'
+import { useCircleWallet, useCircleContractCall } from '../../contexts/CircleWalletContext'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
   props: { ...(await serverSideTranslations(locale ?? 'en', ['common'])) },
@@ -82,6 +83,14 @@ const BillDetail: NextPage = () => {
     : currentChainId === sepolia.id
     ? 'ethereum'
     : 'unsupported'
+
+  // ─── Ví đăng nhập bằng email (Circle) — CHỈ fallback khi CHƯA connect wagmi
+  // (MetaMask/WalletConnect), và CHỈ hỗ trợ trả trực tiếp trên Arc (không có khái
+  // niệm "đổi chain" như ví thường, nên payMethod luôn ép về 'arc' khi active).
+  const { status: circleStatus, walletAddress: circleWalletAddress } = useCircleWallet()
+  const isCircleActive = circleStatus === 'ready' && !connectedAddress
+  const effectiveAddress = connectedAddress ?? (isCircleActive ? circleWalletAddress ?? undefined : undefined)
+  const effectivePayMethod: PayMethod = isCircleActive ? 'arc' : payMethod
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
   const [billTitle, setBillTitle] = useState<string | null>(null)
@@ -317,10 +326,10 @@ const BillDetail: NextPage = () => {
     address: ARC_USDC_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'allowance',
-    args: connectedAddress ? [connectedAddress, SABI_BILL_ADDRESS] : undefined,
+    args: effectiveAddress ? [effectiveAddress, SABI_BILL_ADDRESS] : undefined,
     chainId: arcTestnet.id,
     query: {
-      enabled: !!connectedAddress,
+      enabled: !!effectiveAddress,
       refetchOnWindowFocus: false,
       staleTime: 15_000,
       ...rpcRetryQueryOptions,
@@ -357,14 +366,30 @@ const BillDetail: NextPage = () => {
     if (approveError) resetApprove()
   }, [approveError, resetApprove])
 
+  // Ba lệnh ghi qua ví Circle — chỉ dùng khi isCircleActive, chạy song song với
+  // 3 useWriteContract wagmi bên dưới (không thay thế).
+  const circleApprove = useCircleContractCall()
+  const circlePayShare = useCircleContractCall()
+  const circlePaySlot = useCircleContractCall()
+
   // Approve đúng số tiền cần trả — MetaMask sẽ hiện đúng số thay vì
   // "115792089..." khi dùng maxUint256. Mỗi lần approve cho 1 giao dịch cụ thể.
   const handleApprove = async (amountToApprove?: bigint) => {
+    // Fallback: nếu không có amount cụ thể thì approve tổng bill (vẫn hợp lý)
+    const amount = amountToApprove ?? (bill?.totalAmount ?? 2n ** 128n)
+
+    if (isCircleActive) {
+      circleApprove.execute({
+        contractAddress: ARC_USDC_ADDRESS,
+        abiFunctionSignature: 'approve(address,uint256)',
+        abiParameters: [SABI_BILL_ADDRESS, amount.toString()],
+      })
+      return
+    }
+
     if (currentChainId !== arcTestnet.id) {
       await switchChainAsync({ chainId: arcTestnet.id })
     }
-    // Fallback: nếu không có amount cụ thể thì approve tổng bill (vẫn hợp lý)
-    const amount = amountToApprove ?? (bill?.totalAmount ?? 2n ** 128n)
     approve({
       address: ARC_USDC_ADDRESS,
       abi: ERC20_ABI,
@@ -382,7 +407,7 @@ const BillDetail: NextPage = () => {
   const hasEnoughAllowance = (amountNeeded: bigint) =>
     allowance !== undefined && allowance >= amountNeeded
 
-  const isApprovingNow = isApproving || isConfirmingApprove
+  const isApprovingNow = isCircleActive ? circleApprove.isPending : (isApproving || isConfirmingApprove)
 
 
   const { writeContract: payShare, data: payShareTx, isPending: isPayingShare, error: payShareError } = useWriteContract()
@@ -398,30 +423,50 @@ const BillDetail: NextPage = () => {
     chainId: arcTestnet.id,
   })
 
+  // Merge state wagmi/Circle — chỗ dùng ở JSX phía dưới không cần biết đang ở
+  // nhánh nào, chỉ đọc đúng 1 bộ giá trị theo isCircleActive.
+  const mergedIsPayingShare = isCircleActive ? circlePayShare.isPending : isPayingShare || isConfirmingShare
+  const mergedPayShareTx = isCircleActive ? circlePayShare.txHash : payShareTx
+  const mergedShareConfirmed = isCircleActive ? circlePayShare.isSuccess : isShareConfirmed
+  const mergedPayShareError = isCircleActive ? circlePayShare.error : payShareError
+
+  const mergedIsPayingSlot = isCircleActive ? circlePaySlot.isPending : isPayingSlot || isConfirmingSlot
+  const mergedPaySlotTx = isCircleActive ? circlePaySlot.txHash : paySlotTx
+  const mergedSlotConfirmed = isCircleActive ? circlePaySlot.isSuccess : isSlotConfirmed
+  const mergedPaySlotError = isCircleActive ? circlePaySlot.error : paySlotError
+
   // Event SlotFilled có thể chưa kịp index ngay lúc tx vừa confirm (RPC lag) —
   // thử lại 1 lần sau 6s, giống hệt cơ chế đã dùng cho cross-chain, để không
   // phải F5 mới thấy dòng góp tiền mới.
   useEffect(() => {
-    if (!isSlotConfirmed) return
+    if (!mergedSlotConfirmed) return
     refetchBill()
     fetchContributions()
     const retry = setTimeout(fetchContributions, 6000)
     return () => clearTimeout(retry)
-  }, [isSlotConfirmed])
+  }, [mergedSlotConfirmed])
 
   // Trả trực tiếp 1 share xong → kéo lại ví đã trả (SharePaid) để hoá đơn hiện
   // đúng địa chỉ thay vì "Phần #n" mãi mãi. Cùng lý do RPC lag như trên — thử
   // lại 1 lần sau 6s.
   useEffect(() => {
-    if (!isShareConfirmed) return
+    if (!mergedShareConfirmed) return
     fetchSharePayers()
     const retry = setTimeout(fetchSharePayers, 6000)
     return () => clearTimeout(retry)
-  }, [isShareConfirmed])
+  }, [mergedShareConfirmed])
 
   const handlePayShare = (shareId: number) => {
   if (billId === undefined) return
   setPayingShareId(shareId)
+  if (isCircleActive) {
+    circlePayShare.execute({
+      contractAddress: SABI_BILL_ADDRESS,
+      abiFunctionSignature: 'payShare(uint256,uint256)',
+      abiParameters: [billId.toString(), shareId.toString()],
+    })
+    return
+  }
   payShare({
     address: SABI_BILL_ADDRESS,
     abi: SABI_BILL_ABI,
@@ -434,6 +479,14 @@ const BillDetail: NextPage = () => {
 
   const handlePaySlot = () => {
     if (billId === undefined || !bill) return
+    if (isCircleActive) {
+      circlePaySlot.execute({
+        contractAddress: SABI_BILL_ADDRESS,
+        abiFunctionSignature: 'paySlot(uint256,uint256)',
+        abiParameters: [billId.toString(), bill.amountPerSlot.toString()],
+      })
+      return
+    }
     paySlot({
       address: SABI_BILL_ADDRESS,
       abi: SABI_BILL_ABI,
@@ -502,7 +555,7 @@ const BillDetail: NextPage = () => {
             numSlots={Number(bill.numSlots ?? 0)}
             totalAmount={bill.totalAmount}
             collectedAmount={progressAmount}
-            isWalletConnected={!!connectedAddress}
+            isWalletConnected={!!effectiveAddress}
             contributions={contributions}
             slotNames={slotNames}
             sharePayers={sharePayers}
@@ -538,13 +591,14 @@ const BillDetail: NextPage = () => {
                 {mode === 'ASSIGNED' ? t('bill.assigned_hint') : t('bill.openslot_hint')}
               </p>
 
-              {/* Chưa connect ví → ẩn toàn bộ danh sách share (tên, hash, trạng thái).
-                  CỐ Ý lệch spec gốc "ai có link cũng xem được" — chủ dự án đã chốt đổi. */}
-              {mode === 'ASSIGNED' && !connectedAddress && (
+              {/* Chưa connect ví (wagmi hoặc Circle) → ẩn toàn bộ danh sách share
+                  (tên, hash, trạng thái). CỐ Ý lệch spec gốc "ai có link cũng xem
+                  được" — chủ dự án đã chốt đổi. */}
+              {mode === 'ASSIGNED' && !effectiveAddress && (
                 <p style={{ color: colors.textMuted, fontSize: 12 }}>{t('bill.no_contributions')}</p>
               )}
 
-              {mode === 'ASSIGNED' && !!connectedAddress && (
+              {mode === 'ASSIGNED' && !!effectiveAddress && (
               <AssignedShares
                 billId={billId}
                 shareCount={Number(shareCount ?? 0)}
@@ -553,8 +607,9 @@ const BillDetail: NextPage = () => {
                 sharePaidTxHashes={sharePaidTxHashes}
                 profiles={profiles}
                 connectedAddress={connectedAddress}
+                signerAddress={effectiveAddress}
                 onPayDirect={handlePayShare}
-                isPaying={isPayingShare || isConfirmingShare}
+                isPaying={mergedIsPayingShare}
                 payingShareId={payingShareId}
                 paidTxHashes={paidTxHashes}
                 onUpdateName={updateShareName}
@@ -562,11 +617,11 @@ const BillDetail: NextPage = () => {
                 onApprove={handleApprove}
                 onCancelApprove={handleCancelApprove}
                 isApproving={isApprovingNow}
-                isWalletConnected={!!connectedAddress}
-                payTxHash={payShareTx}
-                paySuccess={isShareConfirmed}
-                payError={payShareError}
-                payMethod={payMethod}
+                isWalletConnected={!!effectiveAddress}
+                payTxHash={mergedPayShareTx}
+                paySuccess={mergedShareConfirmed}
+                payError={mergedPayShareError}
+                payMethod={effectivePayMethod}
                 onShareLoaded={reportShareProgress}
                 onCrossChainSuccess={fetchSharePayers}
               />
@@ -576,20 +631,21 @@ const BillDetail: NextPage = () => {
               <OpenSlotInfo
                 billId={billId}
                 amountPerSlot={bill.amountPerSlot}
+                signerAddress={effectiveAddress}
                 onPayDirect={handlePaySlot}
-                isPaying={isPayingSlot || isConfirmingSlot}
+                isPaying={mergedIsPayingSlot}
                 hasAllowance={hasEnoughAllowance(bill.amountPerSlot)}
                 onApprove={handleApprove}
                 isApproving={isApprovingNow}
-                isWalletConnected={!!connectedAddress}
-                payTxHash={paySlotTx}
-                paySuccess={isSlotConfirmed}
-                payError={paySlotError}
+                isWalletConnected={!!effectiveAddress}
+                payTxHash={mergedPaySlotTx}
+                paySuccess={mergedSlotConfirmed}
+                payError={mergedPaySlotError}
                 contributions={contributions}
                 isLoadingContributions={isLoadingContributions}
                 slotNames={slotNames}
                 profiles={profiles}
-                payMethod={payMethod}
+                payMethod={effectivePayMethod}
                 onCrossChainSuccess={() => {
                   refetchBill()
                   fetchContributions()
@@ -913,6 +969,7 @@ function AssignedShares({
   sharePaidTxHashes,
   profiles,
   connectedAddress,
+  signerAddress,
   onPayDirect,
   isPaying,
   payingShareId,
@@ -937,6 +994,9 @@ function AssignedShares({
   sharePaidTxHashes: Record<number, `0x${string}`>
   profiles: Record<string, UserFirestoreData>
   connectedAddress: `0x${string}` | undefined
+  // Địa chỉ ví đang thực sự trả (wagmi HOẶC ví Circle) — dùng để hiện đúng số dư
+  // USDC trong PaymentArcModal khi trả bằng ví Circle (không có wagmi useAccount()).
+  signerAddress: `0x${string}` | undefined
   onPayDirect: (shareId: number) => void
   isPaying: boolean
   payingShareId: number | null
@@ -1037,6 +1097,7 @@ function AssignedShares({
             share={share}
             refetchShare={refetchAllShares}
             name={shareNames[shareId]}
+            signerAddress={signerAddress}
             payerProfile={payerProfile}
             onUpdateName={onUpdateName}
             onPayDirect={onPayDirect}
@@ -1106,6 +1167,7 @@ function ShareRow({
   share,
   refetchShare,
   name,
+  signerAddress,
   payerProfile,
   onUpdateName,
   onPayDirect,
@@ -1127,6 +1189,7 @@ function ShareRow({
   share: { amount: bigint; paid: boolean } | undefined
   refetchShare: () => void
   name: string | undefined
+  signerAddress: `0x${string}` | undefined
   payerProfile: UserFirestoreData | undefined
   onUpdateName: (shareId: number, name: string) => void
   onPayDirect: (shareId: number) => void
@@ -1457,6 +1520,7 @@ function ShareRow({
           payTxHash={payTxHash}
           paySuccess={paySuccess}
           payError={payError}
+          payerAddress={signerAddress}
         />
       )}
     </div>
@@ -1466,6 +1530,7 @@ function ShareRow({
 function OpenSlotInfo({
   billId,
   amountPerSlot,
+  signerAddress,
   onPayDirect,
   isPaying,
   hasAllowance,
@@ -1484,6 +1549,7 @@ function OpenSlotInfo({
 }: {
   billId: bigint
   amountPerSlot: bigint
+  signerAddress: `0x${string}` | undefined
   onPayDirect: () => void
   isPaying: boolean
   hasAllowance: boolean
@@ -1671,6 +1737,7 @@ function OpenSlotInfo({
           payTxHash={payTxHash}
           paySuccess={paySuccess}
           payError={payError}
+          payerAddress={signerAddress}
         />
       )}
 
