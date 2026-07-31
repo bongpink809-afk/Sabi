@@ -41,10 +41,12 @@ class RateLimiter {
   }
 }
 
-// Tối đa 2 request cùng lúc, cách nhau tối thiểu 400ms mỗi lần bắn — chậm hơn
-// bản concurrency-only, nhưng đây là RPC public rate-limit rất chặt, cần ưu
-// tiên không bị 429 hơn là tốc độ.
-const rpcLimiter = new RateLimiter(2, 400)
+// Tối đa 4 request cùng lúc, cách nhau tối thiểu 200ms mỗi lần bắn — tăng gấp
+// đôi throughput so với bản cũ (2 request/400ms) để lần quét đầu tiên (chưa có
+// cache, tới 24 chunk cho 3 loại event) đỡ chậm. Retry 429/lỗi mạng thoáng qua
+// đã có ở withRetry429() (eventScan.ts) nên nới giới hạn này chấp nhận được;
+// nếu lại thấy 429 dội về nhiều, hạ số này xuống trước khi nghi ngờ chỗ khác.
+const rpcLimiter = new RateLimiter(4, 200)
 
 export async function withGlobalConcurrency<T>(fn: () => Promise<T>): Promise<T> {
   const release = await rpcLimiter.acquire()

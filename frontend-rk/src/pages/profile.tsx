@@ -4,6 +4,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'next-i18next'
 import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
 import { formatUnits, toFunctionSelector } from 'viem'
@@ -600,7 +601,6 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   const router = useRouter()
   const { t } = useTranslation('common')
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
-  const [method, setMethod] = useState<'direct' | 'crosschain' | null>(null)
   const href = `/bill/${payment.billId.toString()}`
 
   // Prefetch ngay khi danh sách render — lý do giống CreatedBillRow ở trên
@@ -613,20 +613,18 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   // function selector của tx đã emit event (payShare/paySlot vs payCrossChain).
   // KHÔNG hiện tên chain nguồn cụ thể (Base/Arbitrum/Ethereum Sepolia) vì dữ liệu
   // đó không còn tồn tại lại được ở phía Arc sau khi relay xong — tránh bịa.
-  useEffect(() => {
-    if (!publicClient) return
-    let cancelled = false
-    publicClient
-      .getTransaction({ hash: payment.txHash })
-      .then((tx) => {
-        if (cancelled) return
-        setMethod(tx.input.toLowerCase().startsWith(PAY_CROSSCHAIN_SELECTOR) ? 'crosschain' : 'direct')
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [payment.txHash, publicClient])
+  // staleTime: Infinity vì tx đã final on-chain, không bao giờ đổi — tránh gọi
+  // lại getTransaction mỗi lần vào /profile (trước đây dùng useEffect + state
+  // cục bộ nên refetch mỗi lần mount, dù cùng txHash).
+  const { data: method } = useQuery({
+    queryKey: ['paymentMethod', payment.txHash],
+    queryFn: async () => {
+      const tx = await publicClient!.getTransaction({ hash: payment.txHash })
+      return tx.input.toLowerCase().startsWith(PAY_CROSSCHAIN_SELECTOR) ? 'crosschain' : 'direct'
+    },
+    enabled: !!publicClient,
+    staleTime: Infinity,
+  })
 
   const description = method === 'crosschain' ? t('profile.payment_method_crosschain') : method === 'direct' ? t('profile.payment_method_direct') : null
 

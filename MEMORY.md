@@ -1,6 +1,31 @@
 # MEMORY.md — Sabi project state
 
-Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet.
+Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
+
+## Cập nhật mới nhất (session dọn repo + verify contract + fix tốc độ Profile)
+
+**Đã làm, đã commit (2 commit, `0a0fa23` + `31380b0` — CHƯA push lúc viết mục này, cần kiểm tra `git log origin/main..HEAD` để biết chắc):**
+
+- **README.md** ở root: thay từ boilerplate Foundry mặc định sang README thật cho Sabi (mô tả sản phẩm, luồng cross-chain CCTP V2, tech stack, hướng dẫn chạy contract + frontend). Commit `0a0fa23`.
+- **Xoá dead code:** `src/BillHookReceiver.sol` + 2 test file liên quan + `script/DeployBillHookReceiver.s.sol` — kiến trúc hook receiver riêng của Phase 1, không còn dùng vì `src/bill.sol` (SabiBill, contract thật đang live) tự gọi `receiveMessage()` và decode `BurnMessageV2` trực tiếp. Kèm xoá boilerplate Foundry mặc định (`src/Counter.sol`, `test/Counter.t.sol`, và `script/Counter.s.sol` — file sau phát sinh ngoài kế hoạch vì import `Counter.sol` làm build fail, đã hỏi chủ dự án trước khi xoá). Commit `31380b0`. Verify: `forge build` sạch, `forge test` 20/20 pass.
+- **Không đụng:** `script/DeploySabiBill.s.sol`, `broadcast/DeploySabiBill.s.sol/*.json` (log deploy thật), contract address, TODO cố ý ở `SabiHeader.tsx`/`transaction-status.ts`.
+
+**Đã làm, KHÔNG tạo file thay đổi (hành động bên ngoài repo):**
+
+- Chạy `forge verify-contract` cho `0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` (`src/bill.sol:SabiBill`) lên Blockscout Arc Testnet (`https://testnet.arcscan.app/api/`). Constructor args đối chiếu khớp đúng broadcast log thật. Submit thành công — `Response: OK`, GUID `192963ebcc9f39c0057597cf3aa7d97c99a83c756a6ab7c5`. **Chưa xác nhận trạng thái "Verified" cuối cùng trên explorer**, chỉ mới xác nhận submit OK.
+
+**Đã sửa code, CHƯA commit lúc viết mục này (`frontend-rk/src/pages/profile.tsx`, `frontend-rk/src/lib/concurrency.ts`):**
+
+- Fix tốc độ tải `/profile` (chủ dự án báo "hiện lâu"). Root cause 1 (đã sửa, rủi ro thấp): `PaymentRow` gọi `publicClient.getTransaction()` riêng cho từng dòng "đã trả" qua `useEffect`/`useState`, không cache, refetch lại mỗi lần mount dù cùng `txHash` — đổi sang `useQuery` với `staleTime: Infinity` (tx đã final on-chain, không đổi). Root cause 2 (đã sửa, có đánh đổi rủi ro, chủ dự án đã đồng ý): `concurrency.ts` có rate limiter cố ý rất chặt (2 request đồng thời/400ms) để né 429 RPC public, làm chậm lần quét log đầu tiên (chưa có cache, tới 24 chunk cho 3 loại event) — nới lên 4 request/200ms.
+- Verify đã làm: `npx tsc --noEmit` sạch. **Chưa test tay bằng browser thật** (môi trường không có ví/RPC testnet) — cần chủ dự án tự kiểm tra `/profile` có nhanh hơn không, và có bị 429 dội lại sau khi nới limiter hay không.
+
+**Việc còn pending (ưu tiên theo thứ tự):**
+
+1. Push 2 commit `0a0fa23`, `31380b0` + commit fix tốc độ Profile lên `origin/main`.
+2. Test tay browser thật cho fix tốc độ Profile — nếu 429 dội lại, hạ số trong `concurrency.ts:47` xuống trước khi nghi ngờ chỗ khác.
+3. Xác nhận trạng thái "Verified" cuối trên `https://testnet.arcscan.app/address/0x192963eBcC9f39C0057597CF3AA7d97c99a83c75`.
+
+Chi tiết đầy đủ (bằng chứng cụ thể, lệnh đã chạy): xem `memory/project_sabi_phase1.md` (file trong repo này).
 
 ## Trạng thái tổng quan (theo bằng chứng git log, không suy diễn)
 

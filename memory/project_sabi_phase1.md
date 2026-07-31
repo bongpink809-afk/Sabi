@@ -150,3 +150,34 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 **Trạng thái push (tính đến cuối session này):** commit `8b2cde4` và `0ead92b` — kiểm tra `git log origin/main..HEAD` lúc đọc lại file này để biết chắc đã push hay chưa.
 
 **How to apply:** Nếu chủ dự án muốn bật lại Circle email login, chỉ cần đổi `NEXT_PUBLIC_ENABLE_CIRCLE_LOGIN=true` trong `.env.local` (đảm bảo SMTP Circle Console đã sửa xong trước), rồi làm nốt phần verify tx-hash field trong `transaction-status.ts`. Nếu chủ dự án lại báo bug hiển thị Profile/bill tương tự bill 36, **không điều tra lại từ đầu** — kiểm tra trước xem có phải lỗi mạng thoáng qua kiểu "Failed to fetch" hay không (đã có retry rồi nên ít khả năng, nhưng vẫn còn giả thuyết `MAX_CHUNKS` treo lại).
+
+---
+
+## Cập nhật (session sau — dọn repo trước deadline nộp 9/8, verify contract, fix tốc độ tải Profile)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này không chạy lại integration test Base Sepolia → Arc mà Phase 1 còn treo từ đầu file này; các việc dưới đây là dọn dẹp/verify/tối ưu, không phải tiến triển phase.
+
+**1. Dọn repo cho Arc Architects Program (deadline 9/8) — đã commit, CHƯA push lúc viết mục này:**
+
+- Thay `README.md` ở root: từ boilerplate Foundry mặc định sang README thật cho Sabi (mô tả sản phẩm, luồng cross-chain, tech stack, hướng dẫn chạy). Commit `0a0fa23`.
+- Xoá dead code Phase 1 không còn dùng: `src/BillHookReceiver.sol`, `test/BillHookReceiver.t.sol`, `test/BillHookReceiverRealData.t.sol`, `script/DeployBillHookReceiver.s.sol` — lý do: `src/bill.sol` (SabiBill, đã deploy thật) tự gọi `receiveMessage()` và decode `BurnMessageV2`, không còn dùng kiến trúc hook receiver riêng của Phase 1 nữa (chính `BillHookReceiver.sol` tự ghi TODO "xóa trước Phase 3" nhưng chưa từng xoá cho tới session này). Xoá kèm boilerplate Foundry mặc định `src/Counter.sol`, `test/Counter.t.sol`. Xoá thêm `script/Counter.s.sol` (ngoài kế hoạch ban đầu — file này import `src/Counter.sol` nên xoá Counter.sol làm `forge build` fail toàn bộ; đã hỏi chủ dự án, chọn xoá luôn). Commit `31380b0`. Verify: `forge build` sạch, `forge test` 20/20 pass (9 SabiBillCrossChain + 11 SabiBill).
+- **TUYỆT ĐỐI không đụng:** `script/DeploySabiBill.s.sol`, `broadcast/DeploySabiBill.s.sol/*.json` (log deploy thật), contract `SabiBill` tại `0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` không redeploy/không đổi tên. TODO ở `SabiHeader.tsx:121` và `transaction-status.ts:15,38` giữ nguyên (việc thật còn treo có chủ đích, xem mục Circle login phía trên).
+
+**2. Verify contract source trên Blockscout (Arc Testnet explorer) — đã chạy `forge verify-contract` cho `0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` (`src/bill.sol:SabiBill`, verifier `blockscout`, `https://testnet.arcscan.app/api/`), constructor args đối chiếu khớp đúng với broadcast log thật (`0x3600...0000`, `0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275`). Submit thành công (`Response: OK`, GUID `192963ebcc9f39c0057597cf3aa7d97c99a83c756a6ab7c5`). Đây là hành động bên ngoài repo (gọi API Blockscout), không tạo file thay đổi nào để commit — **chưa tự confirm trạng thái verify cuối cùng đã "Verified" hẳn trên explorer hay chưa**, chỉ xác nhận đã submit thành công.
+
+**3. Fix tốc độ tải `/profile` (mục "bill đã tạo"/"đã trả" hiện lâu) — đã sửa code, CHƯA commit lúc viết mục này, CHƯA verify bằng browser thật (môi trường không có ví/kết nối RPC testnet):**
+
+- Root cause tìm được bằng đọc code trực tiếp (không đoán): `PaymentRow` trong `profile.tsx` gọi `publicClient.getTransaction()` riêng cho từng dòng "đã trả" để phân biệt trả trực tiếp/cross-chain, qua `useEffect` + `useState` cục bộ — **không cache gì cả**, refetch lại mỗi lần mount dù cùng `txHash` (khác với phần quét log `BillCreated`/`SharePaid` đã có cache `localStorage` qua `eventScan.ts`).
+- Fix: đổi `PaymentRow` sang dùng `useQuery` (`@tanstack/react-query`, đã có `QueryClientProvider` sẵn ở `_app.tsx`) với `queryKey: ['paymentMethod', txHash]`, `staleTime: Infinity` — hợp lý vì dữ liệu tx đã final on-chain, không bao giờ đổi.
+- Nguyên nhân thứ 2 (đã biết trước, có đánh đổi rủi ro): `concurrency.ts` có 1 rate limiter cố ý rất chặt (2 request đồng thời, cách nhau tối thiểu 400ms) để tránh 429 từ RPC public — làm chậm lần quét log đầu tiên (chưa có cache, tới 24 chunk cho 3 loại event × `MAX_CHUNKS=8`). Đã nới lên 4 request đồng thời / 200ms sau khi chủ dự án đồng ý đánh đổi. **Rủi ro:** RPC public từng gây lỗi 429/mất mạng thoáng qua thật (xem bug bill 36, đã fix bằng retry ở `0ead92b`) — nếu 429 dội lại nhiều sau khi nới, hạ số này xuống trước khi nghi ngờ chỗ khác.
+- Verify đã làm: `npx tsc --noEmit` sạch (exit 0). **Chưa làm:** test tay trên browser thật xem `/profile` có nhanh hơn rõ rệt không, và có bị 429 dội lại sau khi nới limiter hay không.
+
+**Việc còn pending / TODO chưa chốt (tính đến cuối session này):**
+
+- Push 2 commit `0a0fa23`, `31380b0` lên `origin/main` (chủ dự án yêu cầu review trước, chưa push lúc 2 commit này được tạo — cần xác nhận lại trạng thái push khi đọc lại file này).
+- Commit 2 file sửa tốc độ Profile (`frontend-rk/src/pages/profile.tsx`, `frontend-rk/src/lib/concurrency.ts`) — chưa commit lúc viết mục này.
+- Test tay browser thật cho fix tốc độ Profile (mục 3) — chưa làm được, cần chủ dự án tự kiểm tra bằng ví thật.
+- Xác nhận trạng thái "Verified" cuối cùng của contract trên `https://testnet.arcscan.app/address/0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` (mục 2) — chỉ mới xác nhận submit thành công, chưa xác nhận Blockscout đã xử lý xong.
+- Giả thuyết `MAX_CHUNKS` cache cap trong `eventScan.ts` (xem update trước) vẫn còn tồn tại về lý thuyết, chưa fix — không phải trọng tâm session này.
+
+**How to apply:** Trước khi đụng lại `concurrency.ts`, nhớ đây là giá trị đã tinh chỉnh 2 lần dựa trên kinh nghiệm thật với RPC public (ban đầu chặt để tránh 429, session này nới ra đổi lấy tốc độ) — nếu đổi tiếp, nên có lý do cụ thể (đo được tốc độ thật hoặc lỗi 429 thật), không đoán mò.
