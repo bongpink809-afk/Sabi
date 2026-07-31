@@ -41,12 +41,13 @@ class RateLimiter {
   }
 }
 
-// Tối đa 4 request cùng lúc, cách nhau tối thiểu 200ms mỗi lần bắn — tăng gấp
-// đôi throughput so với bản cũ (2 request/400ms) để lần quét đầu tiên (chưa có
-// cache, tới 24 chunk cho 3 loại event) đỡ chậm. Retry 429/lỗi mạng thoáng qua
-// đã có ở withRetry429() (eventScan.ts) nên nới giới hạn này chấp nhận được;
-// nếu lại thấy 429 dội về nhiều, hạ số này xuống trước khi nghi ngờ chỗ khác.
-const rpcLimiter = new RateLimiter(4, 200)
+// Tối đa 2 request cùng lúc, cách nhau tối thiểu 400ms mỗi lần bắn — từng thử
+// nới lên 4/200ms để tăng tốc lần quét đầu, nhưng verify thật bằng console cho
+// thấy RPC public trả 429 hàng loạt ở mức đó (kèm cả lỗi CORS trên production,
+// nhiều khả năng do RPC quá tải trả lỗi không kèm header CORS) — mỗi 429 phải
+// retry với backoff tới ~25s (xem withRetry429 trong eventScan.ts), khiến
+// /profile treo lâu hơn hẳn so với trước. Quay lại giá trị an toàn đã verify.
+const rpcLimiter = new RateLimiter(2, 400)
 
 export async function withGlobalConcurrency<T>(fn: () => Promise<T>): Promise<T> {
   const release = await rpcLimiter.acquire()

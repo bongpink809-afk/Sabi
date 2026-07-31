@@ -216,6 +216,8 @@
     "stat_payments_made": "payments made",
     "stat_usdc_contributed": "USDC contributed",
     "loading_onchain_history": "Loading on-chain history...",
+    "load_error": "Couldn't load on-chain history (RPC error or overloaded). This doesn't mean you have no bills — try reloading.",
+    "retry": "Retry",
     "section_created_title": "Bills created",
     "section_created_sub": "Tap to open bill detail page",
     "empty_created": "No bills created yet.",

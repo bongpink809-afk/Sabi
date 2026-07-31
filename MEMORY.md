@@ -2,30 +2,39 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session dọn repo + verify contract + fix tốc độ Profile)
+## Cập nhật mới nhất (session dọn repo + verify contract + fix bug "profile không hiện bill")
 
-**Đã làm, đã commit (2 commit, `0a0fa23` + `31380b0` — CHƯA push lúc viết mục này, cần kiểm tra `git log origin/main..HEAD` để biết chắc):**
+**Đã commit + push lên `origin/main`:**
 
-- **README.md** ở root: thay từ boilerplate Foundry mặc định sang README thật cho Sabi (mô tả sản phẩm, luồng cross-chain CCTP V2, tech stack, hướng dẫn chạy contract + frontend). Commit `0a0fa23`.
-- **Xoá dead code:** `src/BillHookReceiver.sol` + 2 test file liên quan + `script/DeployBillHookReceiver.s.sol` — kiến trúc hook receiver riêng của Phase 1, không còn dùng vì `src/bill.sol` (SabiBill, contract thật đang live) tự gọi `receiveMessage()` và decode `BurnMessageV2` trực tiếp. Kèm xoá boilerplate Foundry mặc định (`src/Counter.sol`, `test/Counter.t.sol`, và `script/Counter.s.sol` — file sau phát sinh ngoài kế hoạch vì import `Counter.sol` làm build fail, đã hỏi chủ dự án trước khi xoá). Commit `31380b0`. Verify: `forge build` sạch, `forge test` 20/20 pass.
-- **Không đụng:** `script/DeploySabiBill.s.sol`, `broadcast/DeploySabiBill.s.sol/*.json` (log deploy thật), contract address, TODO cố ý ở `SabiHeader.tsx`/`transaction-status.ts`.
+- `0a0fa23` — README.md thật cho Sabi (thay boilerplate Foundry mặc định).
+- `31380b0` — xoá dead code Phase 1 (`src/BillHookReceiver.sol` + test liên quan + `script/DeployBillHookReceiver.s.sol`, không còn dùng vì `src/bill.sol` tự gọi `receiveMessage()`/decode `BurnMessageV2`) + boilerplate Foundry (`src/Counter.sol`, `test/Counter.t.sol`, `script/Counter.s.sol`). `forge build`/`forge test` 20/20 pass.
+- `f3adbaa` — fix nhỏ tốc độ `/profile` lần 1: `PaymentRow` đổi từ `useEffect`/`useState` sang `useQuery` (`staleTime: Infinity`) để không gọi lại `getTransaction()` mỗi lần mount cùng `txHash`.
+- **Không đụng:** `script/DeploySabiBill.s.sol`, `broadcast/*.json` (log deploy thật), contract address, TODO cố ý ở `SabiHeader.tsx`/`transaction-status.ts`.
 
-**Đã làm, KHÔNG tạo file thay đổi (hành động bên ngoài repo):**
+**Đã làm, không tạo file thay đổi:** `forge verify-contract` cho `0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` lên Blockscout Arc Testnet — submit thành công (GUID `192963ebcc9f39c0057597cf3aa7d97c99a83c756a6ab7c5`), **chưa xác nhận trạng thái "Verified" cuối trên explorer**.
 
-- Chạy `forge verify-contract` cho `0x192963eBcC9f39C0057597CF3AA7d97c99a83c75` (`src/bill.sol:SabiBill`) lên Blockscout Arc Testnet (`https://testnet.arcscan.app/api/`). Constructor args đối chiếu khớp đúng broadcast log thật. Submit thành công — `Response: OK`, GUID `192963ebcc9f39c0057597cf3aa7d97c99a83c756a6ab7c5`. **Chưa xác nhận trạng thái "Verified" cuối cùng trên explorer**, chỉ mới xác nhận submit OK.
+**Bug thật đã tìm ra + fix gốc (không phải "chậm", mà là MẤT DỮ LIỆU vĩnh viễn trong UI):**
 
-**Đã sửa code, CHƯA commit lúc viết mục này (`frontend-rk/src/pages/profile.tsx`, `frontend-rk/src/lib/concurrency.ts`):**
+`eventScan.ts` lần quét đầu (chưa cache) chỉ quét lùi 40.000 block gần nhất rồi lưu cache coi như "đã quét xong toàn bộ" — bill nào tạo xa hơn cửa sổ đó bị mất vĩnh viễn khỏi `/profile`, catch-up sau này chỉ đi tới không bao giờ quay lại. Verify bằng RPC thật: ví `0x9E8CFf3CCE6A4Ba5e233bF013618eA8026AAfC38` có 24 bill trải từ block 50.298.310 tới 53.946.434 (~4,27 triệu block từ lúc deploy) — cửa sổ 40.000 block bỏ sót gần hết.
 
-- Fix tốc độ tải `/profile` (chủ dự án báo "hiện lâu"). Root cause 1 (đã sửa, rủi ro thấp): `PaymentRow` gọi `publicClient.getTransaction()` riêng cho từng dòng "đã trả" qua `useEffect`/`useState`, không cache, refetch lại mỗi lần mount dù cùng `txHash` — đổi sang `useQuery` với `staleTime: Infinity` (tx đã final on-chain, không đổi). Root cause 2 (đã sửa, có đánh đổi rủi ro, chủ dự án đã đồng ý): `concurrency.ts` có rate limiter cố ý rất chặt (2 request đồng thời/400ms) để né 429 RPC public, làm chậm lần quét log đầu tiên (chưa có cache, tới 24 chunk cho 3 loại event) — nới lên 4 request/200ms.
-- Verify đã làm: `npx tsc --noEmit` sạch. **Chưa test tay bằng browser thật** (môi trường không có ví/RPC testnet) — cần chủ dự án tự kiểm tra `/profile` có nhanh hơn không, và có bị 429 dội lại sau khi nới limiter hay không.
+**Fix — kiến trúc seed file tĩnh** (RPC public giới hạn cứng 10.000 block/`eth_getLogs` + rate-limit riêng, verify bằng `curl` thật, không thể quét full lịch sử trong 1 lần tải trang):
 
-**Việc còn pending (ưu tiên theo thứ tự):**
+- `frontend-rk/scripts/build-history-seed.mjs` — script chạy 1 lần ngoài app, quét TOÀN BỘ lịch sử 3 event từ block deploy tới latest (chunk 10.000, có checkpoint tự resume), output `frontend-rk/public/data/onchain-history-seed.json` (đã commit, ~34KB, 130 log, `cutoffBlock: 54580493` tính tới 2026-07-31). Không cần re-run định kỳ — catch-up runtime tự lo phần sau cutoff.
+- `logCache.ts` thêm `logIndex` + `version: 2` (cache format cũ bị discard an toàn, seed đã thay thế).
+- `eventScan.ts` gộp seed + cache local + log mới, dedup bằng `(transactionHash, logIndex)` — không dùng riêng `txHash`, không cắt theo block range. Gộp 2 nhánh "cold scan lùi"/"catch-up tới" cũ thành 1 mô hình: luôn quét tới từ `max(cache cursor, seed cutoff)`.
+- **Riêng biệt:** `concurrency.ts` từng bị nới lên 4 request/200ms (rủi ro đã biết trước) — verify thật thấy RPC trả 429 hàng loạt (kể cả gây lỗi CORS trên production `sabi-arc.vercel.app`) → **đã revert về 2 request/400ms**, giá trị này đã verify an toàn qua thực nghiệm, đừng nới lại nếu không đo được bằng chứng cụ thể.
+- **Riêng biệt:** `useProfileData.ts`/`profile.tsx` từng nuốt lỗi im lặng (query fail → hiện "chưa có bill" như thật) — thêm `isError`/`refetch`, banner vàng + nút "Thử lại".
+- Verify: `npm run build` sạch, chủ dự án xác nhận trên browser thật `/profile` hiện đúng 24 bill (có 1 React hydration warning dev-mode-only ở `FaucetMenu`/`SabiHeader.tsx`, không đụng tới, không phải bug thật).
 
-1. Push 2 commit `0a0fa23`, `31380b0` + commit fix tốc độ Profile lên `origin/main`.
-2. Test tay browser thật cho fix tốc độ Profile — nếu 429 dội lại, hạ số trong `concurrency.ts:47` xuống trước khi nghi ngờ chỗ khác.
-3. Xác nhận trạng thái "Verified" cuối trên `https://testnet.arcscan.app/address/0x192963eBcC9f39C0057597CF3AA7d97c99a83c75`.
+**Phát hiện phụ, đã báo không tự sửa:** file `.env` ở ROOT repo (khác `frontend-rk/.env.local`) có `PRIVATE_KEY` thật dạng plaintext + flag Circle login không comment — đã verify nằm trong `.gitignore`, KHÔNG được git track, không lộ lên GitHub. Chủ dự án tự quyết có dọn/rotate key không.
 
-Chi tiết đầy đủ (bằng chứng cụ thể, lệnh đã chạy): xem `memory/project_sabi_phase1.md` (file trong repo này).
+**Việc còn pending:**
+
+1. Xác nhận trạng thái "Verified" cuối trên `https://testnet.arcscan.app/address/0x192963eBcC9f39C0057597CF3AA7d97c99a83c75`.
+2. File `.env` root chứa private key thật — chưa có quyết định dọn/rotate.
+3. Commit cuối cùng của các thay đổi mô tả ở trên (concurrency revert, seed file, isError fix) — kiểm tra `git log` khi đọc lại để biết chắc đã push hay chưa.
+
+Chi tiết đầy đủ (bằng chứng cụ thể, lệnh đã chạy, block/tx cụ thể): xem `memory/project_sabi_phase1.md` (file trong repo này).
 
 ## Trạng thái tổng quan (theo bằng chứng git log, không suy diễn)
 

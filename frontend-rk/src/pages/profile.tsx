@@ -42,7 +42,7 @@ function getBillTitleFromMap(billId: bigint, firestoreTitles: Record<string, str
 const Profile: NextPage = () => {
   const { t } = useTranslation('common')
   const { address, isConnected } = useAccount()
-  const { billsCreated, paymentsMade, totalContributed, paidShareCountByBillId, isLoading } = useProfileData(address)
+  const { billsCreated, paymentsMade, totalContributed, paidShareCountByBillId, isLoading, isError, refetch } = useProfileData(address)
   const [createdPage, setCreatedPage] = useState(0)
   const [paidPage, setPaidPage] = useState(0)
 
@@ -402,9 +402,47 @@ const Profile: NextPage = () => {
                 </p>
               )}
 
+              {/* isError riêng biệt với "0 bill thật" — không im lặng hiện empty state khi
+                  fetchProfileData lỗi (vd RPC 429 hết retry), tránh hiểu nhầm thành chưa có bill */}
+              {isError && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                    background: colors.warningBg,
+                    color: colors.warning,
+                    borderRadius: radius.card,
+                    padding: '10px 14px',
+                    fontSize: 13,
+                    textAlign: 'center',
+                    marginBottom: 16,
+                  }}
+                >
+                  <span>{t('profile.load_error')}</span>
+                  <button
+                    onClick={() => refetch()}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: colors.warning,
+                      background: 'none',
+                      border: `1px solid ${colors.warning}`,
+                      borderRadius: 6,
+                      padding: '4px 10px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t('profile.retry')}
+                  </button>
+                </div>
+              )}
+
               <div className="sabi-grid-profile">
                 <Section title={t('profile.section_created_title')} sub={t('profile.section_created_sub')}>
-                  {!isLoading && billsCreated.length === 0 && <EmptyRow text={t('profile.empty_created')} />}
+                  {!isLoading && !isError && billsCreated.length === 0 && <EmptyRow text={t('profile.empty_created')} />}
                   {visibleCreated.map((bill) => (
                     <CreatedBillRow key={bill.txHash} bill={bill} progress={billsProgress[bill.billId.toString()]} titleMap={firestoreBillTitles} />
                   ))}
@@ -414,7 +452,7 @@ const Profile: NextPage = () => {
                 </Section>
 
                 <Section title={t('profile.section_paid_title')} sub={t('profile.section_paid_sub')}>
-                  {!isLoading && paymentsMade.length === 0 && <EmptyRow text={t('profile.empty_paid')} />}
+                  {!isLoading && !isError && paymentsMade.length === 0 && <EmptyRow text={t('profile.empty_paid')} />}
                   {visiblePaid.map((p, i) => (
                     <PaymentRow key={`${p.txHash}-${i}`} payment={p} titleMap={firestoreBillTitles} />
                   ))}

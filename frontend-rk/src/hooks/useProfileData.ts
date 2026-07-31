@@ -31,13 +31,21 @@ interface ProfileData {
   // nhờ guard AlreadyPaid trong contract, nên đếm log = đếm share đã trả).
   paidShareCountByBillId: Record<string, number>
   isLoading: boolean
+  isError: boolean
+  refetch: () => void
 }
 
 async function fetchProfileData(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   address: `0x${string}`
 ) {
+  // eslint-disable-next-line no-console
+  console.time('[profile-perf] total fetchProfileData')
+  // eslint-disable-next-line no-console
+  console.time('[profile-perf] getBlockNumber')
   const latestBlock = await publicClient.getBlockNumber()
+  // eslint-disable-next-line no-console
+  console.timeEnd('[profile-perf] getBlockNumber')
 
   // 3 event quét song song trở lại — withGlobalConcurrency() ở scanLogs() đã
   // giới hạn tổng số request đồng thời lên RPC qua 1 semaphore DÙNG CHUNG,
@@ -49,11 +57,17 @@ async function fetchProfileData(
   // SharePaid/SlotFilled quét KHÔNG lọc (payer không indexed) nên dùng chung 1
   // key cho mọi ví trên cùng trình duyệt — dữ liệu on-chain vốn giống nhau.
   const addressKey = address.toLowerCase()
+  // eslint-disable-next-line no-console
+  console.time('[profile-perf] scan 3 events')
   const [createdLogs, shareLogs, slotLogs] = await Promise.all([
     scanEventLogs(publicClient, 'BillCreated', { organizer: address }, latestBlock, `sabi-scan-BillCreated-${addressKey}`),
     scanEventLogs(publicClient, 'SharePaid', undefined, latestBlock, 'sabi-scan-SharePaid'),
     scanEventLogs(publicClient, 'SlotFilled', undefined, latestBlock, 'sabi-scan-SlotFilled'),
   ])
+  // eslint-disable-next-line no-console
+  console.timeEnd('[profile-perf] scan 3 events')
+  // eslint-disable-next-line no-console
+  console.timeEnd('[profile-perf] total fetchProfileData')
 
   // Sort mới nhất trước — dùng blockNumber vì thứ tự log trả về giữa các chunk
   // (quét lùi từ block mới nhất) không đảm bảo chronological toàn cục.
@@ -98,7 +112,7 @@ export function useProfileData(address: `0x${string}` | undefined): ProfileData 
   // useQuery cache theo address — quay lại /profile trong vòng 30s không phải
   // quét log lại từ đầu (trước đây mỗi lần vào trang đều quét mới, cảm giác "hơi lâu"
   // dù chỉ vừa xem xong). Bấm qua lại tab Hồ sơ nhiều lần trong phiên sẽ thấy ngay.
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['profileData', address],
     queryFn: () => fetchProfileData(publicClient!, address!),
     enabled: !!address && !!publicClient,
@@ -111,6 +125,8 @@ export function useProfileData(address: `0x${string}` | undefined): ProfileData 
     totalContributed: data?.totalContributed ?? 0n,
     paidShareCountByBillId: data?.paidShareCountByBillId ?? {},
     isLoading,
+    isError,
+    refetch: () => refetch(),
   }
 }
 

@@ -216,6 +216,8 @@
     "stat_payments_made": "lần đã trả",
     "stat_usdc_contributed": "USDC đã góp",
     "loading_onchain_history": "Đang tải lịch sử",
+    "load_error": "Không tải được lịch sử on-chain (RPC lỗi hoặc quá tải). Đây không phải là bạn chưa có bill nào — thử tải lại.",
+    "retry": "Thử lại",
     "section_created_title": "Bill đã tạo",
     "section_created_sub": "Bấm vào để mở trang chi tiết",
     "empty_created": "Chưa tạo bill nào.",
