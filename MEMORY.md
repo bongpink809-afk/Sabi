@@ -2,7 +2,32 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session dọn repo + verify contract + fix bug "profile không hiện bill")
+## Cập nhật mới nhất (session thêm tính năng Share bill + điều tra 1 lần RPC blip)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+**1. Tính năng "Chia sẻ bill" ở trang chi tiết bill — đã xây xong, đã verify bằng Playwright (cài tạm, không phải dependency của repo):**
+
+- File mới `frontend-rk/src/components/ShareBillSheet.tsx` (bottom sheet chia sẻ) + nút "Share bill" gradient tím dưới `ReceiptCard` trong `bill/[id].tsx` (bọc chung 1 `<div>` để không phá CSS đảo panel mobile) + namespace `share_*` mới trong `public/locales/{en,vi}/common.json`.
+- `shareText` lấy tên người tạo bill thật (organizer address → tra `profileName` Firestore, tái dùng `useProfilesSync` có sẵn).
+- **2 biến thể tuỳ thiết bị** (chốt sau nhiều vòng hỏi lại với chủ dự án):
+  - Desktop: chỉ 3 nút — Telegram, Mail, + 1 nút "Copy link" chung.
+  - Mobile fallback (trình duyệt mobile không hỗ trợ `navigator.share()`): đầy đủ 7 nút — Telegram, WhatsApp, Discord, X, Messenger, Zalo, Mail (Discord/X/Messenger/Zalo copy-link vì không có URL scheme public để pre-fill).
+  - `isMobile` xác định bằng regex `userAgent`, KHÔNG dùng `navigator.share` tồn tại hay không (lý do ngay dưới).
+- **`navigator.share()` (native OS share) CHỈ gọi khi `isMobile === true`:** trước đó chỉ check API tồn tại, nhưng Windows Edge/Chrome cũng có Web Share API — gọi trên desktop bật share dialog CỦA WINDOWS (Facebook/LinkedIn/Outlook/app lạ, không kiểm soát được). Chủ dự án xác nhận qua ảnh chụp thật, chốt: desktop luôn dùng sheet tự vẽ.
+- **Giới hạn nền tảng đã giải thích rõ, không cố khắc phục (không có API public):** X không có link mở thẳng DM kèm text (chỉ có intent "soạn tweet công khai") → copy-link. Discord không có URL scheme mở picker chọn kênh từ web (Procreate làm được vì là app native gọi thẳng share sheet HĐH có Share Extension riêng của Discord — web không chạm được share sheet đó trừ khi cũng gọi `navigator.share()`, nhưng vậy lại kéo theo toàn bộ app hệ thống). Telegram không auto-link `http://localhost` (thiếu domain/TLD thật) — sẽ tự hết khi deploy domain thật, không phải bug.
+- **Verify:** Playwright cài tạm trong scratchpad (không thêm vào `package.json`), chụp screenshot xác nhận cả 2 biến thể đúng thứ tự/nội dung, toast đúng, link Telegram build đúng `encodeURIComponent` + tên thật. **Chưa test bằng điện thoại thật** (chỉ giả lập UA Playwright) — hành vi `navigator.share()` thật trên Android/iOS chưa verify bằng máy thật.
+
+**2. Điều tra RPC "Failed to fetch" ở bill detail — CHỈ điều tra, KHÔNG sửa code:**
+
+- Chủ dự án báo Next.js dev overlay hiện `HttpRequestError` cho `eth_blockNumber`, badge "1 Issue" — trang vẫn render bình thường (không crash), vì `fetchSharePayers` đã có try/catch, chỉ `console.error` (Next.js dev tự vợt console.error vào Issues, không phải crash thật). Hàm này không retry ở lần gọi đầu lúc mount.
+- Chủ dự án xác nhận: **chỉ 1 lần, F5 là hết** → kết luận RPC public nghẽn thoáng qua, không sửa code. Nếu tái diễn thường xuyên, cần thêm retry cho lần gọi đầu ở `fetchSharePayers`/`fetchContributions`.
+
+**Việc còn pending:** test tay bằng điện thoại thật cho share sheet; theo dõi xem lỗi RPC blip có tái diễn không.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session dọn repo + verify contract + fix bug "profile không hiện bill")
 
 **Đã commit + push lên `origin/main`:**
 

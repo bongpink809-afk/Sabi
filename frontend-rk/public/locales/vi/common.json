@@ -200,7 +200,17 @@
     "prev_page": "← Trước",
     "next_page": "Sau →",
     "page_indicator": "Trang {{current}}/{{total}}",
-    "combined_name": "{{assigned}} ({{payer}} trả)"
+    "combined_name": "{{assigned}} ({{payer}} trả)",
+    "share_button": "Chia sẻ bill",
+    "share_text": "{{creator}} vừa tạo bill {{amount}} USDC trên Sabi, bấm vào trả phần của bạn",
+    "share_email_subject": "Yêu cầu thanh toán bill Sabi",
+    "share_sheet_title": "Chia sẻ bill này",
+    "share_fallback_note": "Discord, X, Messenger và Zalo không cho phép điền sẵn tin nhắn qua link — bấm sẽ copy link, bạn tự paste vào app.",
+    "share_cancel": "Huỷ",
+    "share_copy_link_label": "Copy link",
+    "share_toast_opening": "Đang mở {{platform}}…",
+    "share_toast_copied": "Đã copy — paste vào {{platform}}",
+    "share_toast_copied_link": "Đã copy link"
   },
   "profile": {
     "page_title": "Hồ sơ — Sabi",

@@ -16,6 +16,7 @@ import { PaymentChainModal } from '../../components/PaymentChainModal'
 import { CrossChainProgressModal } from '../../components/CrossChainProgressModal'
 import { PaymentSuccessModal } from '../../components/PaymentSuccessModal'
 import { PaymentArcModal } from '../../components/PaymentArcModal'
+import { ShareBillSheet } from '../../components/ShareBillSheet'
 import { SabiHeader } from '../../components/SabiHeader'
 import { arcTestnet } from '../../wagmi'
 import { useCrossChainPayment } from '../../hooks/useCrossChainPayment'
@@ -95,6 +96,7 @@ const BillDetail: NextPage = () => {
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
   const [billTitle, setBillTitle] = useState<string | null>(null)
   const [payingShareId, setPayingShareId] = useState<number | null>(null)
+  const [showShareSheet, setShowShareSheet] = useState(false)
   // hash đã confirm của từng share — lưu bền để không mất khi F5 lại trang
   const [paidTxHashes, setPaidTxHashes] = useState<Record<number, `0x${string}`>>({})
 
@@ -241,6 +243,13 @@ const BillDetail: NextPage = () => {
       staleTime: 30_000,
       ...rpcRetryQueryOptions,
     },
+  })
+
+  // Hồ sơ (tên) của người tạo bill — dùng cho shareText của nút "Chia sẻ bill".
+  // Tách riêng khỏi useProfilesSync ở trên vì địa chỉ organizer chỉ có được sau
+  // khi đọc xong getBill, không gộp chung profileAddresses (computed trước đó) được.
+  useProfilesSync(bill ? [bill.organizer] : [], (fetched) => {
+    setProfiles((prev) => ({ ...prev, ...fetched }))
   })
 
   // bill.mode: 0 = ASSIGNED, 1 = OPEN_SLOT (theo enum BillMode trong SabiBill.sol)
@@ -527,6 +536,26 @@ const BillDetail: NextPage = () => {
       ? assignedProgressValues.filter((s) => s.paid).reduce((sum, s) => sum + s.amount, 0n)
       : contributions.reduce((sum, c) => sum + c.amount, 0n)
 
+  // ─── Chia sẻ bill ──────────────────────────────────────────────────────────
+  // Ưu tiên native share sheet của OS trên MOBILE THẬT (navigator.share) — sheet
+  // tự vẽ (ShareBillSheet) dùng làm fallback (mobile không hỗ trợ navigator.share)
+  // hoặc luôn hiện trên desktop. Trước đây chỉ check navigator.share tồn tại, nhưng
+  // Windows Edge/Chrome cũng có navigator.share (mở share dialog của Windows, không
+  // kiểm soát được icon/thứ tự) → phải check thêm userAgent mobile thật.
+  const billUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/bill/${billId.toString()}`
+  const organizerProfile = profiles[bill.organizer.toLowerCase()]
+  const creatorName = organizerProfile?.profileName ?? `${bill.organizer.slice(0, 6)}…${bill.organizer.slice(-4)}`
+  const shareText = t('bill.share_text', { creator: creatorName, amount: formatUnits(bill.totalAmount, 6) })
+  const isMobileDevice = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+
+  const handleShareClick = () => {
+    if (isMobileDevice && typeof navigator !== 'undefined' && navigator.share) {
+      navigator.share({ title: 'Sabi Bill', text: shareText, url: billUrl }).catch(() => {})
+    } else {
+      setShowShareSheet(true)
+    }
+  }
+
   return (
     <div style={wrap}>
       <Head>
@@ -543,24 +572,52 @@ const BillDetail: NextPage = () => {
             margin: '0 auto',
           }}
         >
-          <ReceiptCard
-            billId={billId}
-            billTitle={billTitle}
-            mode={mode}
-            shareCount={Number(shareCount ?? 0)}
-            shareNames={shareNames}
-            shareProgress={shareProgress}
-            amountPerSlot={bill.amountPerSlot}
-            matchedSlotsCount={Number(bill.matchedSlotsCount ?? 0)}
-            numSlots={Number(bill.numSlots ?? 0)}
-            totalAmount={bill.totalAmount}
-            collectedAmount={progressAmount}
-            isWalletConnected={!!effectiveAddress}
-            contributions={contributions}
-            slotNames={slotNames}
-            sharePayers={sharePayers}
-            profiles={profiles}
-          />
+          <div>
+            <ReceiptCard
+              billId={billId}
+              billTitle={billTitle}
+              mode={mode}
+              shareCount={Number(shareCount ?? 0)}
+              shareNames={shareNames}
+              shareProgress={shareProgress}
+              amountPerSlot={bill.amountPerSlot}
+              matchedSlotsCount={Number(bill.matchedSlotsCount ?? 0)}
+              numSlots={Number(bill.numSlots ?? 0)}
+              totalAmount={bill.totalAmount}
+              collectedAmount={progressAmount}
+              isWalletConnected={!!effectiveAddress}
+              contributions={contributions}
+              slotNames={slotNames}
+              sharePayers={sharePayers}
+              profiles={profiles}
+            />
+
+            <button
+              onClick={handleShareClick}
+              style={{
+                marginTop: 16,
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                background: `linear-gradient(135deg, ${colors.primary}, ${colors.primaryHover})`,
+                color: '#fff',
+                border: 'none',
+                borderRadius: radius.button,
+                padding: 16,
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: `0 10px 24px ${colors.shadowColor}`,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M18 8a3 3 0 100-6 3 3 0 000 6zM6 15a3 3 0 100-6 3 3 0 000 6zm12 6a3 3 0 100-6 3 3 0 000 6zM8.6 13.5l6.8 3.9M15.4 6.6L8.6 10.5" stroke="white" strokeWidth={1.7} strokeLinecap="round" />
+              </svg>
+              {t('bill.share_button')}
+            </button>
+          </div>
 
           <div>
             <ProgressPanel
@@ -656,6 +713,16 @@ const BillDetail: NextPage = () => {
           </div>
         </div>
       </main>
+
+      {showShareSheet && (
+        <ShareBillSheet
+          billUrl={billUrl}
+          shareText={shareText}
+          subtitle={`${formatUnits(bill.totalAmount, 6)} USDC · ${billTitle ?? `Bill #${billId.toString()}`}`}
+          isMobile={isMobileDevice}
+          onClose={() => setShowShareSheet(false)}
+        />
+      )}
     </div>
   )
 }

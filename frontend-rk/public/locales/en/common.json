@@ -200,7 +200,17 @@
     "prev_page": "← Prev",
     "next_page": "Next →",
     "page_indicator": "Page {{current}}/{{total}}",
-    "combined_name": "{{assigned}} (paid by {{payer}})"
+    "combined_name": "{{assigned}} (paid by {{payer}})",
+    "share_button": "Share bill",
+    "share_text": "{{creator}} created a {{amount}} USDC bill on Sabi, tap to pay your part",
+    "share_email_subject": "Sabi bill payment request",
+    "share_sheet_title": "Share this bill",
+    "share_fallback_note": "Discord, X, Messenger and Zalo don't allow pre-filling a message via link — tapping copies the link, you paste it into the app yourself.",
+    "share_cancel": "Cancel",
+    "share_copy_link_label": "Copy link",
+    "share_toast_opening": "Opening {{platform}}...",
+    "share_toast_copied": "Copied — paste into {{platform}}",
+    "share_toast_copied_link": "Link copied"
   },
   "profile": {
     "page_title": "Profile — Sabi",

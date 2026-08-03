@@ -194,3 +194,39 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 - `concurrency.ts` hiện tại (2 request/400ms) đã verify AN TOÀN qua thực nghiệm thật (từng nới lên 4/200ms và thấy 429 dội thật) — không nới lại nếu không đo được bằng chứng cụ thể.
 - Nếu sau này có bug kiểu "log/event on-chain bị thiếu trong UI", **kiểm tra trước xem seed file có đang được load đúng không** (`fetch('/data/onchain-history-seed.json')`, xem `cutoffBlock`) trước khi nghi ngờ logic quét — đây là lớp nền dữ liệu mới, khác hẳn kiến trúc "chỉ quét cửa sổ gần nhất" trước đây.
 - Dedup log LUÔN dùng `(transactionHash, logIndex)`, không bao giờ dùng riêng `txHash` hay cắt theo block range — nếu thêm event type mới vào seed/cache sau này, giữ nguyên nguyên tắc này.
+
+---
+
+## Cập nhật (session sau — thêm tính năng Share bill, điều tra 1 lần RPC blip)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry, không có bằng chứng mới về integration test Base Sepolia → Arc mà Phase 1 còn treo từ đầu file này.
+
+**1. Tính năng "Chia sẻ bill" ở trang chi tiết bill (`frontend-rk/src/pages/bill/[id].tsx`) — ĐÃ XÂY XONG, đã verify bằng Playwright (cài tạm ở scratchpad, không phải dependency của repo):**
+
+- File mới `frontend-rk/src/components/ShareBillSheet.tsx` — bottom sheet chia sẻ, dùng chung component `Modal`-style overlay tự vẽ (không tái dùng `Modal.tsx` có sẵn vì cần animation slide-up từ dưới, khác kiểu centered card).
+- Nút "Share bill" (gradient tím, theo đúng demo HTML chủ dự án gửi) đặt ngay dưới `ReceiptCard`, bọc chung 1 `<div>` để không phá vỡ CSS `.sabi-grid-detail > *:first-child/*:last-child` (dùng để đảo thứ tự panel trên mobile).
+- `shareText` lấy tên người tạo bill thật (`organizer` address → tra `profileName` qua Firestore, tái dùng đúng pattern `useProfilesSync` đã có sẵn cho payer, chỉ thêm 1 lệnh gọi hook nữa sau khi `bill` load xong — không gộp chung vào `profileAddresses` cũ vì lúc đó `bill` chưa tồn tại theo thứ tự hook trong function).
+- **2 biến thể tuỳ thiết bị** (chốt sau nhiều vòng hỏi lại với chủ dự án, xem lý do dưới):
+  - **Desktop** (`isMobile=false`): chỉ 3 nút — Telegram, Mail (2 URL scheme thật, pre-fill được text+link), + 1 nút "Copy link" chung.
+  - **Mobile fallback** (`isMobile=true`, dùng khi trình duyệt mobile KHÔNG hỗ trợ `navigator.share()`): đầy đủ 7 nút — Telegram, WhatsApp, Discord, X, Messenger, Zalo, Mail. Discord/X/Messenger/Zalo không có URL scheme public để pre-fill nên dùng chung 1 hành động copy-link + toast riêng từng platform.
+  - `isMobile` xác định bằng regex `userAgent` (`/Android|iPhone|iPad|iPod/i`), tính 1 lần trong `bill/[id].tsx`, truyền prop xuống — KHÔNG dùng `navigator.share` tồn tại hay không để suy ra mobile (lý do ngay dưới).
+- **`navigator.share()` (native OS share) CHỈ gọi khi `isMobile === true`** — trước đó chỉ check `navigator.share` tồn tại, nhưng Windows Edge/Chrome cũng implement Web Share API: gọi trên desktop sẽ bật share dialog CỦA WINDOWS (kéo theo Facebook/LinkedIn/Outlook/"WhatsApp Install"/Unigram-giả-làm-Telegram — toàn bộ app đã đăng ký trên máy đó, không kiểm soát được icon/tên/thứ tự). Chủ dự án đã xác nhận qua ảnh chụp thật, chốt: desktop LUÔN dùng sheet tự vẽ, native share chỉ dành cho mobile thật.
+- **Giới hạn nền tảng đã giải thích rõ cho chủ dự án, KHÔNG cố gắng khắc phục (không có API public để làm được):**
+  - **X (Twitter):** không có link công khai mở thẳng phần nhắn tin (DM) kèm sẵn text — X chỉ có intent "soạn tweet công khai" (`twitter.com/intent/tweet`). Đã chốt: X dùng copy-link fallback giống Discord/Messenger/Zalo.
+  - **Discord:** không có URL scheme public để mở picker chọn kênh/người từ web. Lý do vì sao Procreate làm được (chủ dự án hỏi trực tiếp): Procreate là app native, gọi thẳng share sheet CỦA HĐH (iOS Share Sheet), và Discord có "Share Extension" chính thức cắm vào đó, chạy trong process của Discord (có sẵn session đăng nhập) nên tự vẽ được UI chọn kênh. Web không chạm được share sheet đó trừ khi cũng gọi `navigator.share()` — nhưng làm vậy sẽ kéo theo toàn bộ app hệ thống (giống vấn đề desktop ở trên), không cherry-pick được "chỉ hiện Discord". Xây Discord Bot thật (OAuth2 + bot server-side) là hướng duy nhất khác nhưng NGOÀI SCOPE, chưa làm.
+  - **Telegram + `localhost` không hiện link xanh:** test lúc dev dùng `http://localhost:3000/...` — Telegram không auto-link hostname `localhost` (không có domain/TLD thật). Sẽ tự hết khi deploy domain thật (vd `sabi-arc.vercel.app`), không phải bug code.
+- File đổi: `frontend-rk/src/pages/bill/[id].tsx`, `frontend-rk/src/components/ShareBillSheet.tsx` (mới), `frontend-rk/public/locales/{en,vi}/common.json` (thêm namespace `share_*` trong `bill`).
+- **Verify:** cài Playwright tạm thời trong scratchpad session (KHÔNG thêm vào `package.json`/`node_modules` của repo) vì môi trường không có sẵn `chromium-cli`; chạy headless Chromium thật, chụp screenshot xác nhận cả 2 biến thể (desktop 3 nút, mobile 7 nút đúng thứ tự Telegram→Discord/WhatsApp→X→Messenger→Zalo→Mail), xác nhận toast "Copied — paste into X/Discord" hiện đúng, xác nhận link Telegram build đúng `encodeURIComponent` với tên người tạo thật lấy từ Firestore. **Chưa test bằng điện thoại thật** — chỉ giả lập UA + viewport iPhone qua Playwright, hành vi `navigator.share()` thật trên Android/iOS thật (có hiện đúng Discord/WhatsApp trong share sheet gốc hay không) CHƯA verify bằng máy thật.
+
+**2. Điều tra RPC "Failed to fetch" ở trang chi tiết bill — CHỈ ĐIỀU TRA, KHÔNG SỬA CODE (không đủ căn cứ để sửa):**
+
+- Chủ dự án báo lỗi 1 lần: Next.js dev overlay hiện `HttpRequestError` cho `eth_blockNumber` tới `rpc.testnet.arc.network`, kèm badge "1 Issue" ở góc trái — nhưng trang vẫn render bình thường (không crash).
+- Xác định: đây gần chắc là lỗi trong `fetchSharePayers` (gọi `publicClient.getBlockNumber()` trực tiếp, có try/catch nên không crash UI, chỉ `console.error`) — Next.js dev mode tự "vợt" `console.error` vào khay Issues, không phải crash thật. Hàm này KHÔNG có retry ở lần gọi đầu tiên lúc mount trang (retry 6s chỉ chạy sau khi có người trả tiền thành công).
+- Chủ dự án xác nhận: **chỉ xảy ra 1 lần, F5 là hết** — kết luận đây là RPC public bị nghẽn thoáng qua 1 lần, không phải lỗi lặp lại có hệ thống. **Không sửa code** — nếu tái diễn thường xuyên sau này, cần thêm retry cho lần gọi đầu ở `fetchSharePayers`/`fetchContributions` (hiện chỉ retry sau khi trả tiền thành công, chưa retry lúc mount).
+
+**Việc còn pending / TODO chưa chốt (tính đến cuối session này):**
+
+- Test tay bằng điện thoại thật cho nút Share bill (native share sheet có đúng hiện Discord/WhatsApp/Telegram như kỳ vọng không) — chưa làm được vì môi trường chỉ có Playwright giả lập UA, không phải thiết bị thật.
+- Nếu lỗi "Failed to fetch" ở `eth_blockNumber` tái diễn nhiều lần (không phải 1 lần rồi hết), cần quay lại thêm retry cho `fetchSharePayers`/`fetchContributions` ở lần gọi đầu lúc mount — hiện chưa làm vì chủ dự án xác nhận chỉ xảy ra 1 lần.
+
+**How to apply:** Khi sửa tiếp `ShareBillSheet.tsx`, nhớ 2 biến thể `isMobile` khác hẳn nhau về SỐ LƯỢNG nút (không chỉ ẩn/hiện native share) — đừng gộp lại thành 1 danh sách chung nếu chủ dự án không yêu cầu lại. Nếu có thêm nền tảng share mới, kiểm tra trước xem nền tảng đó có URL scheme public để pre-fill hay không trước khi giả định — 3/4 nền tảng "phổ biến" (Discord, X, Messenger, Zalo) đã xác nhận KHÔNG có, chỉ copy-link được.
