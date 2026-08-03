@@ -91,7 +91,11 @@ function dedupeLogs(logs: CachedRawLog[]): CachedRawLog[] {
   return result
 }
 
-async function withRetry429<T>(fn: () => Promise<T>, retries = 5, delayMs = 800): Promise<T> {
+// Export để useProfileData.ts / profile.tsx dùng lại đúng policy retry này cho
+// các lệnh RPC đơn lẻ (getBlockNumber, getTransaction) — tránh viết trùng vòng
+// lặp retry lần thứ 3 trong app (đã có ở đây + getBlockNumberWithRetry riêng
+// trong useLandingStats.ts).
+export async function withRetry429<T>(fn: () => Promise<T>, retries = 5, delayMs = 800): Promise<T> {
   try {
     return await fn()
   } catch (err) {

@@ -13,6 +13,8 @@ import { SabiHeader } from '../components/SabiHeader'
 import { SabiLogo } from '../components/SabiLogo'
 import { arcTestnet } from '../wagmi'
 import { useProfileData, useBillsProgress, BillProgress, CreatedBill, PaymentMade } from '../hooks/useProfileData'
+import { withRetry429 } from '../lib/eventScan'
+import { withGlobalConcurrency } from '../lib/concurrency'
 import { useUserProfileSync, useBillTitlesSync, saveProfileName as firebaseSaveProfileName, saveAvatar as firebaseSaveAvatar } from '../hooks/useFirebaseSync'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
@@ -657,7 +659,15 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   const { data: method } = useQuery({
     queryKey: ['paymentMethod', payment.txHash],
     queryFn: async () => {
-      const tx = await publicClient!.getTransaction({ hash: payment.txHash })
+      // withGlobalConcurrency + withRetry429: mỗi PaymentRow tự gọi getTransaction
+      // riêng, danh sách càng nhiều bill càng nhiều request bắn đồng thời, không
+      // qua rate-limiter chung (khác eventScan.ts) — dồn thêm tải lên RPC public
+      // cùng lúc với các lệnh scan log khác của trang, dễ góp phần vào 429/"Failed
+      // to fetch". Route qua đúng 1 limiter chung + retry app-level như mọi RPC
+      // call khác trong app.
+      const tx = await withGlobalConcurrency(() =>
+        withRetry429(() => publicClient!.getTransaction({ hash: payment.txHash }))
+      )
       return tx.input.toLowerCase().startsWith(PAY_CROSSCHAIN_SELECTOR) ? 'crosschain' : 'direct'
     },
     enabled: !!publicClient,

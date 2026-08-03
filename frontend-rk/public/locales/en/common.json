@@ -187,7 +187,7 @@
     "error_prefix": "Error: {{message}}",
     "unsupported_chain_alert": "Please switch your wallet to Arc Testnet, Base Sepolia, Arbitrum Sepolia, or Ethereum Sepolia before paying",
     "unsupported_chain_alert_contribute": "Please switch your wallet to Arc Testnet, Base Sepolia, Arbitrum Sepolia, or Ethereum Sepolia before contributing",
-    "allow_sabi_usdc": "Allow Sabi to use USDC",
+    "allow_sabi_usdc": "Approve Sabi to use USDC",
     "approve_once_note": "Approval needed once before your first contribution",
     "contribute_button": "Pay {{amount}} USDC",
     "cancel_tx": "Cancel transaction",

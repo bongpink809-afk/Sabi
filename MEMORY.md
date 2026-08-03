@@ -2,7 +2,30 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session sửa nội dung Process sang luồng tạo bill, đồng nhất icon, bỏ caption Use Case, chỉnh spacing)
+## Cập nhật mới nhất (session tăng độ ổn định `/profile`: retry getBlockNumber + gộp getTransaction vào rate-limiter chung)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa 3 file `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+Chủ dự án báo `/profile` thỉnh thoảng hiện banner "Couldn't load on-chain history (RPC error or overloaded)" + cảm giác load chậm, muốn trị dứt điểm. Điều tra bằng đọc code + gọi RPC thật (không đoán):
+
+1. **Seed file không phải nguyên nhân:** gap catch-up hiện chỉ ~16.569 block (2 chunk), RPC test trực tiếp bằng `getContractEvents` cho đúng range cần quét trả về nhanh (<1.3s), 0 lỗi — RPC khoẻ tại thời điểm test, lỗi chủ dự án gặp là gián đoạn không liên tục, không phải hỏng vĩnh viễn.
+2. **Đọc source viem** (`buildRequest.js`) xác nhận: transport `http()` mặc định ĐÃ tự retry 3 lần (~150-600ms) cho cả 429 lẫn lỗi mất mạng thoáng qua (`status undefined`) — mọi lệnh RPC trong app đều có sẵn ~1s đệm miễn phí từ viem. Lớp `withRetry429` custom của app (5 lần, backoff tới ~25s) là phòng thủ THỨ HAI — chỉ lệnh nào KHÔNG được bọc lớp này mới thực sự mong manh (chỉ ~1s đệm).
+3. **2 lệnh RPC mong manh tìm được trong luồng `/profile`:** `useProfileData.ts`'s `fetchProfileData()` gọi `getBlockNumber()` trần không có lớp retry thứ 2 (khác `useLandingStats.ts` đã có `getBlockNumberWithRetry` riêng cho đúng việc này) — 1 blip đúng lúc gọi lệnh ĐẦU là toàn bộ query throw, khớp đúng banner lỗi. `profile.tsx`'s `PaymentRow` mỗi dòng tự gọi `getTransaction()` riêng, KHÔNG qua `withGlobalConcurrency` (rate-limiter chung 2 request/400ms) — list dài càng nhiều request bắn đồng thời không điều phối cùng phần quét log khác.
+4. **Đã thử + LOẠI BỎ hướng JSON-RPC batching** (tưởng gộp nhiều lệnh nhỏ thành 1 HTTP request sẽ giúp): RPC Arc Testnet CÓ hỗ trợ batch (verify bằng `curl`), nhưng test thật bằng script viem với đúng 6 lệnh giống `/profile` cho kết quả NGƯỢC: không batch → 6 request, 0 lỗi; bật `batch:true` → 1 request nhưng RPC trả `"request limit reached"` cho 3/6 lệnh; `batch:{wait:20}` → 6/6 lỗi. RPC này đếm giới hạn theo số lệnh logic trong batch chặt hơn hẳn so với gửi rời rạc — **batching phản tác dụng cho RPC này, đã loại bỏ, không dùng, không thử lại hướng này sau này**.
+
+**Đã sửa (không đổi hành vi UI, chỉ tăng độ chịu lỗi RPC):** export `withRetry429` từ `eventScan.ts` (tái dùng thay vì viết thêm bản sao thứ 3); bọc `getBlockNumber()` trong `useProfileData.ts` bằng `withRetry429`; bọc `getTransaction()` trong `PaymentRow` (`profile.tsx`) bằng cả `withGlobalConcurrency` + `withRetry429`.
+
+**Đánh đổi đã báo:** `getTransaction` giờ xếp hàng qua rate-limiter chung thay vì bắn tự do — có thể chậm hơn chút ở trường hợp không lỗi, đổi lại ít khả năng chạm rate-limit hơn. Nhất quán với quyết định cũ ở `concurrency.ts` (ưu tiên ổn định hơn tốc độ thô).
+
+**Giới hạn thật, không trị dứt điểm 100% được:** RPC public testnet có thể nghẽn lâu hơn cả tổng retry app-level (~25s) trong trường hợp xấu nhất — banner + nút Retry vẫn là lớp chống cuối, chỉ giảm tần suất, đã nói rõ với chủ dự án.
+
+**Verify:** `npx tsc --noEmit` sạch; `curl http://localhost:3000/profile` → 200, đúng trạng thái chưa connect ví (chưa test được trạng thái đã connect vì môi trường không có ví thật).
+
+**Ghi nhận phụ:** `bill.allow_sabi_usdc` bản EN được chủ dự án tự sửa tay ("Allow" → "Approve Sabi to use USDC"), không liên quan session này.
+
+Chi tiết: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session sửa nội dung Process sang luồng tạo bill, đồng nhất icon, bỏ caption Use Case, chỉnh spacing)
 
 **Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `frontend-rk/src/pages/index.tsx` + 2 file locale, không chạy lại test Solidity/Foundry.
 

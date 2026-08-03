@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { usePublicClient, useReadContracts } from 'wagmi'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
-import { scanEventLogs } from '../lib/eventScan'
+import { scanEventLogs, withRetry429 } from '../lib/eventScan'
 import { rpcRetryQueryOptions } from '../lib/rpcRetry'
 import { useRetryOnPartialFailure } from './useRetryPartialMulticall'
 import { arcTestnet } from '../wagmi'
@@ -43,7 +43,11 @@ async function fetchProfileData(
   console.time('[profile-perf] total fetchProfileData')
   // eslint-disable-next-line no-console
   console.time('[profile-perf] getBlockNumber')
-  const latestBlock = await publicClient.getBlockNumber()
+  // withRetry429: trước đây gọi trực tiếp không retry — 1 lần "Failed to fetch"/429
+  // thoáng qua ở ĐÚNG lệnh đầu tiên này là rớt thẳng thành isError, chỉ còn dựa
+  // vào retry ~1s có sẵn của viem (3 lần, backoff ngắn) trong khi các lệnh khác
+  // trong hàm này (scanEventLogs) đã có thêm lớp retry 5 lần/backoff tới ~25s.
+  const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
   // eslint-disable-next-line no-console
   console.timeEnd('[profile-perf] getBlockNumber')
 

@@ -315,3 +315,38 @@ Handoff mới (`sabi-landing-v2-demo.html` + note trong chat, không phải file
 **Việc còn pending (không đổi so với trước, session này không chạm tới):** dán link Feedback Google Form thật; test tay điện thoại thật cho Share bill; theo dõi RPC "Failed to fetch" có tái diễn không.
 
 **How to apply:** Nếu chủ dự án đổi nội dung Process/Use Case lần nữa, sửa trực tiếp `common.json` namespace `landing.*` là đủ (không cần đụng `index.tsx` trừ khi đổi cấu trúc — vd thêm lại chip hoặc đổi số bước). Nếu cần fix phần Stats hiện trắng trong screenshot full-page sau này, nhớ đây là do `IntersectionObserver` + full-page screenshot, không phải bug — muốn chụp đúng phải cuộn thật qua từng phần trước khi chụp, không chỉ resize viewport.
+
+---
+
+## Cập nhật (session sau — tăng độ ổn định `/profile`: retry getBlockNumber + gộp getTransaction vào rate-limiter chung)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa 3 file `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+**Bối cảnh:** Chủ dự án báo `/profile` thỉnh thoảng hiện banner "Couldn't load on-chain history (RPC error or overloaded)" + cảm giác load chậm, muốn "trị dứt điểm". Điều tra bằng đọc code + gọi RPC thật (không đoán):
+
+1. **Verify seed file KHÔNG phải nguyên nhân:** `cutoffBlock` seed (`onchain-history-seed.json`) = 55.089.050, latest block lúc kiểm tra = 55.105.619 — gap chỉ ~16.569 block (2 chunk, dưới `MAX_CHUNKS=4`), không phải bug "catch-up quá xa" như từng gặp trước đây. `curl`/script `getContractEvents` trực tiếp cho đúng 2 chunk cần quét của cả 3 event: tất cả trả về nhanh (<1.3s), 0 lỗi — RPC đang khoẻ tại thời điểm test, nên lỗi chủ dự án gặp là **gián đoạn/tải cao không liên tục**, không phải hỏng vĩnh viễn.
+2. **Đọc thẳng source viem** (`node_modules/viem/_esm/utils/buildRequest.js`, hàm `shouldRetry`) để hiểu tầng retry có sẵn: transport `http()` mặc định ĐÃ tự retry 3 lần (backoff ngắn ~150-600ms) cho cả lỗi 429 lẫn lỗi `status undefined` (mất mạng thoáng qua — do `if (error.status)` là truthy-check, `undefined` lọt qua nhánh đó rơi xuống `return true` ở cuối hàm). Nghĩa là **mọi lệnh RPC trong app đều đã có sẵn ~1 giây retry miễn phí từ viem**, kể cả trước khi có `withRetry429` custom của app. Điều này làm rõ: lớp `withRetry429` (5 lần, backoff tới ~25s) trong `eventScan.ts`/`rpcRetry.ts` là lớp PHÒNG THỦ THỨ HAI, không phải thứ nhất — chỉ những lệnh KHÔNG được bọc lớp thứ hai này mới thực sự mong manh (chỉ có ~1s đệm thay vì ~25s).
+3. **Xác định đúng 2 lệnh RPC "mong manh"** kiểu trên trong luồng `/profile`:
+   - `useProfileData.ts` → `fetchProfileData()` gọi `publicClient.getBlockNumber()` **trần, không có lớp retry thứ 2** — khác `useLandingStats.ts` đã có `getBlockNumberWithRetry` riêng cho đúng lệnh tương tự. 1 lần RPC nghẽn thoáng qua (>~1s) đúng lúc gọi lệnh ĐẦU TIÊN này là toàn bộ `fetchProfileData` throw ngay, React Query chỉ retry thêm 1 lần theo default (`_app.tsx`, không riêng cho profileData) → dễ thành `isError=true`, đúng banner chủ dự án thấy.
+   - `profile.tsx` → `PaymentRow` mỗi dòng "Bill đã trả" tự gọi `publicClient.getTransaction()` **riêng, không qua `withGlobalConcurrency`** (rate-limiter chung 2 request/400ms dùng cho quét log) — list càng nhiều bill càng nhiều request bắn đồng thời, KHÔNG được điều phối cùng các request quét log khác đang chạy song song trên cùng trang, dễ cộng dồn tải lên RPC hơn mức limiter dự tính.
+4. **Đã thử + LOẠI BỎ 1 hướng tưởng sẽ giúp nhưng thực nghiệm cho kết quả ngược lại:** bật JSON-RPC batching (`http(url, { batch: true })`) để gộp nhiều lệnh nhỏ (vd 5 `getTransaction` + 1 `getBlockNumber`) thành 1 HTTP request — RPC `rpc.testnet.arc.network` xác nhận CÓ hỗ trợ batch (`curl` gửi mảng JSON-RPC, nhận đúng mảng kết quả). Nhưng **test thật bằng script viem với 6 lệnh giống hệt luồng `/profile`**: không batch → 6 HTTP request, 0 lỗi; bật `batch:true` → 1 HTTP request nhưng RPC trả lỗi `"request limit reached"` cho 3/6 lệnh trong batch; bật `batch:{wait:20}` → 6/6 lệnh lỗi. Kết luận: RPC public này đếm giới hạn theo SỐ LỆNH LOGIC trong 1 batch chặt hơn hẳn so với cùng số lệnh gửi rời rạc — **batching là hướng phản tác dụng cho đúng RPC này, đã loại bỏ, KHÔNG áp dụng**. Ghi lại để session sau không thử lại hướng này mà không biết đã test.
+
+**Đã sửa (an toàn, không đổi hành vi UI, chỉ tăng độ chịu lỗi RPC):**
+- `eventScan.ts`: export `withRetry429` (trước đó là hàm private, chỉ dùng nội bộ file) — tái dùng logic retry 5 lần/backoff đã có sẵn thay vì viết thêm 1 bản sao thứ 3 (bản thứ 2 là `getBlockNumberWithRetry` riêng trong `useLandingStats.ts`).
+- `useProfileData.ts`: bọc `getBlockNumber()` bằng `withRetry429` (import từ `eventScan.ts`).
+- `profile.tsx` (`PaymentRow`): bọc `getTransaction()` bằng cả `withGlobalConcurrency` (từ `concurrency.ts`) lẫn `withRetry429` — đưa vào đúng 1 hàng đợi RPC chung với các lệnh quét log của trang, thay vì bắn tự do không kiểm soát.
+
+**Verify:** `npx tsc --noEmit` sạch. Dev server thật: `curl http://localhost:3000/profile` → 200, HTML render đúng trạng thái "Connect wallet to view your profile" (chưa test được trạng thái ĐÃ connect ví vì môi trường không có ví thật/extension, chỉ Playwright giả lập UA — xem mục pending).
+
+**Đánh đổi đã báo cho chủ dự án:** khi list "Bill đã trả" dài, các lệnh `getTransaction` giờ phải xếp hàng qua rate-limiter chung (2 request/400ms) thay vì bắn đồng thời tự do — có thể chậm hơn một chút so với trước ở trường hợp KHÔNG lỗi, đổi lại giảm khả năng chạm rate-limit khi chạy cùng lúc với phần quét log. Nhất quán với quyết định đã chốt trước đây ở `concurrency.ts` (ưu tiên ổn định hơn tốc độ thô, xem update "dọn repo... fix tốc độ tải Profile").
+
+**Giới hạn thật, KHÔNG thể trị dứt điểm 100%:** đây là RPC public miễn phí của testnet Arc, có thể nghẽn thật sự lâu hơn cả tổng thời gian retry app-level (~25s cộng dồn) trong trường hợp xấu nhất — banner lỗi + nút "Retry" vẫn là lớp chống cuối, không loại bỏ hoàn toàn được khả năng này, chỉ giảm tần suất. Đã nói rõ với chủ dự án, không hứa quá mức.
+
+**Ghi nhận phụ, không phải do session này:** `bill.allow_sabi_usdc` bản EN trong `common.json` được chủ dự án tự sửa tay ngoài phiên làm việc (từ "Allow Sabi to use USDC" → "Approve Sabi to use USDC") — không liên quan tới fix RPC, không tự đổi lại.
+
+**Việc còn pending:**
+- Test tay bằng ví thật cho `/profile` sau khi đã connect (môi trường hiện tại không có ví thật/extension để verify trực tiếp — chỉ verify được bằng đọc code + test RPC trực tiếp + SSR HTML lúc CHƯA connect).
+- Theo dõi xem banner lỗi có còn tái diễn thường xuyên sau fix này không — nếu vẫn tái diễn nhiều, cân nhắc thêm retry cho `useBillsProgress`'s multicall (đã có `rpcRetryQueryOptions` từ trước, không đổi) hoặc xem xét lại `MAX_CHUNKS`/`CHUNK_SIZE` trong `eventScan.ts`.
+- **KHÔNG thử lại batching JSON-RPC cho RPC Arc Testnet này** — đã test thực nghiệm và xác nhận phản tác dụng (xem mục 4 phía trên).
+
+**How to apply:** Nếu sau này thêm 1 lệnh RPC đơn lẻ mới (không qua `scanEventLogs`/`useReadContracts`) ở bất kỳ trang nào, luôn bọc bằng `withRetry429` (export từ `eventScan.ts`) tối thiểu — đây là lớp phòng thủ thứ 2 rẻ, không tốn gì khi RPC khoẻ, chỉ có tác dụng khi RPC blip. Nếu lệnh đó có thể lặp lại N lần trong 1 trang (list dài), bọc thêm `withGlobalConcurrency` (từ `concurrency.ts`) để không bắn song song không kiểm soát.
