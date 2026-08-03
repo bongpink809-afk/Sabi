@@ -2,7 +2,15 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session xây lại landing page v2 — nav, i18n thật, Process/Stats/FAQ)
+## Cập nhật mới nhất (session fix heading Process bị wrap ở bản VI)
+
+`text-wrap: balance` (thêm session trước) chỉ chia đều dòng khi BẮT BUỘC wrap, không giúp fit vừa 1 dòng. Heading Process bản VI vẫn xuống 2 dòng vì `.card-head` có `max-width: 560px` cứng (đủ cho bản Anh ngắn hơn). Fix: bỏ max-width khỏi `.card-head`, chuyển `max-width: 620px` sang riêng `.card-head p` (subtitle). Verify bằng Playwright đo `boundingBox`: height 40.5px (1 dòng) cho cả EN/VI.
+
+**Phát hiện phụ, chưa sửa:** `landing.process_step4_desc` bản VI trong `common.json` bị lỗi gõ tay (thiếu dấu cách "kháclên", thừa khoảng trắng cuối câu) — đây là nội dung chủ dự án tự sửa ngoài phiên làm việc, đã báo lại, chưa tự sửa.
+
+Chi tiết: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session xây lại landing page v2 — nav, i18n thật, Process/Stats/FAQ)
 
 **Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
 

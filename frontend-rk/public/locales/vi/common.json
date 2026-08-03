@@ -269,7 +269,7 @@
     "process_step3_desc": "Ký 1 giao dịch USDC từ chain của bạn — không cần tự bridge hay swap.",
     "process_step3_chip": "1 chữ ký · không swap",
     "process_step4_title": "Đã settle trên Arc",
-    "process_step4_desc": "CCTP V2 Fast Transfer đưa USDC thật lên Arc — không phải bản wrapped.",
+    "process_step4_desc": "CCTP V2 Fast Transfer đưa USDC từ các chain kháclên Arc chỉ 20s ",
     "process_step4_chip": "~20 giây",
     "process_foot_pre": "Mỗi lần trả tiền chỉ cần",
     "process_foot_bold": "1 chữ ký",

@@ -485,7 +485,6 @@ function ProcessSection() {
           overflow: hidden;
         }
         .card-head {
-          max-width: 560px;
           margin-bottom: 52px;
         }
         .eyebrow {
@@ -509,6 +508,7 @@ function ProcessSection() {
           color: rgba(255, 255, 255, 0.55);
           line-height: 1.7;
           margin: 0;
+          max-width: 620px;
         }
         .track-wrap {
           position: relative;

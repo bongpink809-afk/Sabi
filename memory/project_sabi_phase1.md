@@ -275,3 +275,17 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 - Seed file sẽ lại lùi dần theo thời gian — không bắt buộc re-run định kỳ (catch-up runtime tự lo), nhưng nếu muốn landing luôn tải nhanh có thể chạy lại `build-history-seed.mjs` trước các mốc quan trọng (demo, deadline nộp bài).
 
 **How to apply:** Nếu chủ dự án đổi nội dung FAQ/copy landing LẦN NỮA, chỉ cần sửa locale JSON (namespace `landing.*` trong `common.json`) — KHÔNG cần đụng `index.tsx` trừ khi đổi SỐ LƯỢNG câu FAQ (component `FaqSection` hiện hardcode mảng `[1,2,3,4]` theo số thứ tự key `faq_qN`/`faq_aN`).
+
+---
+
+## Cập nhật (session sau — fix heading Process bị wrap ở bản VI)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa CSS 1 chỗ.
+
+`text-wrap: balance` (thêm ở session trước) chỉ CHIA ĐỀU các dòng khi bắt buộc phải wrap, KHÔNG giúp fit vừa 1 dòng — chủ dự án báo heading "Từ ví của bạn đến bill đã thanh toán xong" (VI) vẫn xuống 2 dòng vì `.card-head` (trong Process section, `index.tsx`) có `max-width: 560px` cứng từ demo gốc (đủ cho bản Anh ngắn hơn, không đủ cho bản Việt dài hơn).
+
+**Fix:** bỏ hẳn `max-width: 560px` khỏi `.card-head` (để h2 dùng full chiều rộng card, tự nhiên bị giới hạn bởi padding của `.card-dark` + `.page{max-width:1080}`), chuyển `max-width: 620px` sang riêng `.card-head p` (subtitle) để đoạn văn vẫn không quá rộng khó đọc. Verify bằng Playwright đo `boundingBox` của h2: height 40.5px (đúng 1 dòng) cho cả EN và VI, trước đó VI cao gấp đôi (2 dòng).
+
+**Lưu ý nếu heading nào khác sau này cũng bị wrap không mong muốn:** kiểm tra xem có đang bị `max-width` cố định nào bóp hẹp không trước khi chỉ dựa vào `text-wrap: balance` — 2 công cụ giải quyết 2 vấn đề khác nhau (balance = chia đều khi PHẢI wrap; nới max-width = tránh phải wrap).
+
+**Phát hiện phụ, CHƯA sửa (không phải do session này gây ra):** `landing.process_step4_desc` bản VI trong `common.json` có lỗi gõ — thiếu dấu cách "kháclên" (đúng ra "khác lên") + có 1 khoảng trắng thừa cuối câu ("...chỉ 20s "). Đây là nội dung chủ dự án tự sửa tay ngoài phiên làm việc (không phải AI viết), đã báo lại trong chat, chưa tự sửa vì không chắc có phải lỗi hay cố ý.

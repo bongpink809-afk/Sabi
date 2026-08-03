@@ -269,7 +269,7 @@
     "process_step3_desc": "Sign one USDC transaction from your chain — no manual bridging or swapping.",
     "process_step3_chip": "1 signature · no swap",
     "process_step4_title": "Settled on Arc",
-    "process_step4_desc": "CCTP V2 Fast Transfer brings real USDC to Arc — not a wrapped version.",
+    "process_step4_desc": "CCTP V2 Fast Transfer brings USDC from other chains to Arc in just 20 seconds.",
     "process_step4_chip": "~20 seconds",
     "process_foot_pre": "Every payment is",
     "process_foot_bold": "one signature",
