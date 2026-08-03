@@ -124,7 +124,9 @@ const LOCALES = [
   { code: 'en', label: 'EN' },
 ] as const
 
-function LocaleSwitcher() {
+// Export riêng để landing page (index.tsx) tái dùng đúng 1 cơ chế chuyển ngôn
+// ngữ (router.push với locale) — không viết lại dropdown riêng cho landing.
+export function LocaleSwitcher() {
   const router = useRouter()
   const { t } = useTranslation('common')
   const [open, setOpen] = useState(false)

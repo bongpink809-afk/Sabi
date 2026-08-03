@@ -2,7 +2,33 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session thêm tính năng Share bill + điều tra 1 lần RPC blip)
+## Cập nhật mới nhất (session xây lại landing page v2 — nav, i18n thật, Process/Stats/FAQ)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+**Bối cảnh:** Landing cũ (`frontend-rk/src/pages/index.tsx`) chỉ có Hero + 3 Use Case, không nav, không i18n, không Process/Stats/FAQ. Handoff mới (demo `sabi-landing-v2-demo.html`) yêu cầu thêm toàn bộ. Đã hỏi lại chủ dự án 3 quyết định trước khi code, đều chọn phương án đầy đủ (không rút gọn scope):
+
+1. **Nav mới:** Faucet (link thẳng `https://faucet.circle.com/`, đơn giản hơn hẳn dropdown `FaucetMenu` dùng ở các trang app khác — cố ý khác vì đây là trang marketing nhẹ). Feedback: **chưa có link Google Form thật** — đang để placeholder `href="#"` kèm comment TODO trong `index.tsx`, chờ chủ dự án tạo form rồi dán vào. Dropdown ngôn ngữ: export thêm `LocaleSwitcher` từ `SabiHeader.tsx` (trước đó private) để landing tái dùng đúng 1 cơ chế đổi locale, không viết lại.
+2. **i18n EN/VI thật:** thêm `getServerSideProps`/`serverSideTranslations` + namespace `landing.*` mới trong `common.json` (~50 key) cho toàn bộ nav/hero/use case/process/stats/faq. Hero + Use Case giữ nguyên MÀU đã duyệt trước đó, chỉ đổi string.
+3. **Stats nối data thật:** 2 tile "Bills created" + "USDC settled" đọc thật qua hook mới `frontend-rk/src/hooks/useLandingStats.ts` (quét TOÀN BỘ lịch sử on-chain, không lọc theo ví, tái dùng `scanEventLogs` có sẵn, cacheKey riêng `sabi-scan-*-landing`). "Source chains" (3) và "Avg settlement" (~20s) là thông tin sản phẩm cố định, không phải số đọc chain. Xác nhận qua browser: 47 bills, 296 USDC settled (3/8/2026).
+
+**Process + Stats là 2 section HOÀN TOÀN MỚI** (không có trước đây) — Process: card nền đen, 4 bước, track/packet CSS keyframes thuần. Stats: card tím gradient, 4 tile, reveal-on-scroll + count-up bằng `IntersectionObserver`/`requestAnimationFrame` thuần trong React, không thêm dependency.
+
+**Bug tìm + fix lúc build Stats (verify bằng curl thật):** `useLandingStats` gặp lỗi "Failed to fetch" (CORS-looking, RPC public quá tải nhất thời — verify bằng `curl OPTIONS` giả lập preflight nhiều lần thấy có lúc pass có lúc fail, KHÔNG phải RPC down/lỗi cấu hình vĩnh viễn). Đã thêm retry riêng cho lần gọi `getBlockNumber()` đầu trong hook MỚI này (khác quyết định trước là không đụng các chỗ cũ tương tự trong `bill/[id].tsx`, đã xác nhận chỉ lỗi 1 lần). Landing quét GLOBAL nên catch-up nặng hơn — đã chạy lại `node scripts/build-history-seed.mjs`, đẩy `cutoffBlock` từ 54580493 (31/7) lên 55089050 (3/8), giảm gap catch-up gần về 0.
+
+**Fix nhỏ:** bản dịch VI của heading "Process" dài hơn bản Anh, wrap để lại từ "xong" mồ côi 1 dòng — fix bằng `text-wrap: balance` (CSS thuần), áp dụng cho MỌI heading tương tự trong trang (hero/usecase/process/stats/faq), không chỉ chỗ bị báo.
+
+**FAQ đã đổi nội dung 2 lần trong session, bản CUỐI CÙNG (4 câu, câu 1 mở mặc định):** What is Sabi? → Why do you need Sabi instead of a bank transfer or sending crypto directly? → What's the difference between ASSIGNED and OPEN_SLOT? → How is Sabi different from a typical bridge? (bản đầu có "What is CCTP"/"Which chains"/"gas fees" đã bị thay hết, xem thẳng `common.json` để chắc, đừng tin bản cũ).
+
+**Gotcha xác nhận lại:** next-i18next cache locale JSON phía server rất dai — sau khi sửa `common.json`, kill port 3000 chưa chắc đủ nếu còn tiến trình `node.exe` con sống sót. Luôn `tasklist /FI "IMAGENAME eq node.exe"` + kill hết trước khi tin đã restart sạch.
+
+File đổi: `frontend-rk/src/pages/index.tsx` (viết lại gần như toàn bộ), `frontend-rk/src/hooks/useLandingStats.ts` (mới), `frontend-rk/src/components/SabiHeader.tsx` (export `LocaleSwitcher`), `frontend-rk/public/locales/{en,vi}/common.json`, `frontend-rk/public/data/onchain-history-seed.json` (regenerate).
+
+**Việc còn pending:** dán link Feedback Google Form thật khi có (TODO trong `index.tsx`); seed file sẽ lùi dần theo thời gian, không bắt buộc re-run định kỳ nhưng nên chạy lại trước các mốc quan trọng.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session thêm tính năng Share bill + điều tra 1 lần RPC blip)
 
 **Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
 

@@ -230,3 +230,48 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 - Nếu lỗi "Failed to fetch" ở `eth_blockNumber` tái diễn nhiều lần (không phải 1 lần rồi hết), cần quay lại thêm retry cho `fetchSharePayers`/`fetchContributions` ở lần gọi đầu lúc mount — hiện chưa làm vì chủ dự án xác nhận chỉ xảy ra 1 lần.
 
 **How to apply:** Khi sửa tiếp `ShareBillSheet.tsx`, nhớ 2 biến thể `isMobile` khác hẳn nhau về SỐ LƯỢNG nút (không chỉ ẩn/hiện native share) — đừng gộp lại thành 1 danh sách chung nếu chủ dự án không yêu cầu lại. Nếu có thêm nền tảng share mới, kiểm tra trước xem nền tảng đó có URL scheme public để pre-fill hay không trước khi giả định — 3/4 nền tảng "phổ biến" (Discord, X, Messenger, Zalo) đã xác nhận KHÔNG có, chỉ copy-link được.
+
+---
+
+## Cập nhật (session sau — xây lại landing page v2: nav, i18n thật, Process/Stats/FAQ)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, không chạy lại test Solidity/Foundry.
+
+**Bối cảnh:** Landing page cũ (`frontend-rk/src/pages/index.tsx`) chỉ có Hero + 3 Use Case, KHÔNG có nav, KHÔNG có i18n, KHÔNG có Process/Stats/FAQ — handoff mới (demo `sabi-landing-v2-demo.html`) yêu cầu thêm toàn bộ phần này. 3 quyết định đã hỏi lại chủ dự án trước khi code (AskUserQuestion), đều chọn phương án đầy đủ:
+1. Feedback: chưa có link Google Form thật → dùng placeholder `href="#"` + comment TODO rõ ràng trong `index.tsx`, chờ chủ dự án tạo form.
+2. i18n EN/VI: làm THẬT ngay (không khoá cứng EN), dùng đúng `next-i18next` đã có sẵn trong app (không viết dictionary riêng).
+3. Stats: nối data thật từ on-chain ngay (không để mock).
+
+**1. Nav mới trên landing:** Faucet (link thẳng `https://faucet.circle.com/`, `target=_blank` — ĐƠN GIẢN hơn `FaucetMenu` dropdown của `SabiHeader.tsx` dùng ở các trang app khác, cố ý khác vì landing là trang marketing nhẹ, không cần dropdown 3-chain-gas). Feedback: placeholder chờ link thật. Dropdown ngôn ngữ: **export thêm `LocaleSwitcher` từ `SabiHeader.tsx`** (trước đó là hàm private trong file) để landing tái dùng đúng 1 cơ chế đổi locale (`router.push` với `locale`), không viết lại.
+
+**2. i18n thật cho toàn bộ landing:** thêm `getServerSideProps` (`serverSideTranslations`) + namespace `landing.*` mới trong `public/locales/{en,vi}/common.json` (~50 key: nav, hero, use case, process 4 bước, stats, FAQ). Hero + Use Case giữ nguyên MÀU đã duyệt trước đó (`c.accent`/`c.heading`/... trong `index.tsx`, khác `theme.ts` chung của app) — chỉ đổi string sang `t()`, không đổi style. `process_foot` tách thành 3 key (`_pre`/`_bold`/`_post`) thay vì nhúng `<b>` trong 1 string dịch, để tránh phải dùng `dangerouslySetInnerHTML`.
+
+**3. Section Process + Stats (mới hoàn toàn, không có trước đây):**
+- Process: card nền đen, 4 bước, track/packet chạy bằng CSS keyframes thuần (không cần JS).
+- Stats: card nền tím gradient, 4 tile. "Bills created" + "USDC settled" nối data thật qua hook mới `frontend-rk/src/hooks/useLandingStats.ts` — quét TOÀN BỘ lịch sử on-chain (không lọc theo ví, khác `useProfileData.ts`), dùng cacheKey riêng (`sabi-scan-*-landing`), tái dùng `scanEventLogs` có sẵn. "Source chains" (3) và "Avg settlement" (~20s) là thông tin sản phẩm CỐ ĐỊNH, không phải số đọc chain.
+- Reveal-on-scroll + count-up viết bằng `IntersectionObserver` + `requestAnimationFrame` thuần trong React (component `StatTile`), không thêm dependency ngoài.
+
+**4. Bug tìm thấy + fix trong lúc build Stats (verify bằng curl thật, không đoán):**
+- `useLandingStats` bị lỗi "Failed to fetch" (CORS-looking, cùng loại đã biết — RPC public quá tải nhất thời trả response thiếu header CORS, KHÔNG phải RPC down thật, verify bằng `curl OPTIONS` giả lập preflight nhiều lần thấy có lúc pass có lúc fail). Đã thêm retry riêng (`getBlockNumberWithRetry`, 3 lần, backoff) cho lần gọi `getBlockNumber()` đầu tiên trong hook MỚI này — khác quyết định trước đó là KHÔNG đụng `fetchSharePayers`/`fetchContributions` cũ trong `bill/[id].tsx` (những chỗ đó chủ dự án đã xác nhận chỉ lỗi 1 lần, để nguyên).
+- Landing page quét GLOBAL (không lọc theo bill/ví) nên catch-up nặng hơn hẳn các trang khác — đã chạy lại `node scripts/build-history-seed.mjs` để đẩy `cutoffBlock` từ 54580493 (31/7) lên 55089050 (3/8, 149 log), giảm gap catch-up từ ~408k xuống gần 0 block, cải thiện tốc độ tải lần đầu. Không đụng code, chỉ regenerate `public/data/onchain-history-seed.json`.
+- Số liệu thật xác nhận qua browser: 47 bills created, 296 USDC settled (tính tới lúc quét 3/8).
+
+**5. Fix nhỏ sau khi chủ dự án báo qua screenshot:** bản dịch tiếng Việt của heading "Process" dài hơn bản Anh, bị wrap để lại 1 từ ("xong") mồ côi dòng riêng (do `max-width: 560px` cố định từ demo gốc, hợp với string Anh ngắn hơn). Fix bằng `text-wrap: balance` (CSS thuần, browser tự cân dòng khi bắt buộc wrap) — áp dụng cho MỌI heading tương tự đã viết trong session này (hero `.headline`, `.usecases-heading`, `.card-head h2`, `.stat-head h2`, `.faq-head h2`), không chỉ chỗ bị báo, vì cùng chung rủi ro giữa 2 ngôn ngữ.
+
+**6. Nội dung FAQ đã đổi 2 LẦN trong session này theo yêu cầu chủ dự án — bản CUỐI CÙNG (4 câu, câu 1 mở mặc định):**
+1. What is Sabi? / Sabi là gì?
+2. Why do you need Sabi instead of a bank transfer or sending crypto directly? / Tại sao bạn cần Sabi thay vì chuyển khoản ngân hàng hoặc tự send crypto bình thường?
+3. What's the difference between ASSIGNED and OPEN_SLOT? / Sự khác nhau giữa ASSIGNED và OPEN_SLOT là gì?
+4. How is Sabi different from a typical bridge? / Sabi khác gì so với các bridge thông thường?
+
+(Bản đầu tiên có "What is CCTP"/"Which chains"/"gas fees" đã bị THAY HẾT — nếu thấy các câu đó ở đâu khác trong code/note cũ thì đã lỗi thời, dùng đúng 4 câu trên.)
+
+**Gotcha xác nhận lại lần nữa trong session này:** next-i18next cache locale JSON phía server RẤT DAI — sau khi sửa `common.json`, `kill` port 3000 vẫn CHƯA đủ nếu còn tiến trình `node.exe` con nào sống sót (thấy 3 tiến trình `node.exe` cùng lúc, chỉ 1 cái LISTEN cổng 3000 nhưng phải kill CẢ 3 mới hết stale). Luôn `tasklist /FI "IMAGENAME eq node.exe"` + kill hết trước khi tin là đã "restart sạch".
+
+**File đổi trong session này:** `frontend-rk/src/pages/index.tsx` (viết lại gần như toàn bộ), `frontend-rk/src/hooks/useLandingStats.ts` (mới), `frontend-rk/src/components/SabiHeader.tsx` (export `LocaleSwitcher`), `frontend-rk/public/locales/{en,vi}/common.json` (namespace `landing.*`), `frontend-rk/public/data/onchain-history-seed.json` (regenerate).
+
+**Việc còn pending:**
+- Dán link Feedback Google Form thật khi chủ dự án tạo xong (TODO trong `index.tsx`, tìm `href="#"` ở nav-link Feedback).
+- Seed file sẽ lại lùi dần theo thời gian — không bắt buộc re-run định kỳ (catch-up runtime tự lo), nhưng nếu muốn landing luôn tải nhanh có thể chạy lại `build-history-seed.mjs` trước các mốc quan trọng (demo, deadline nộp bài).
+
+**How to apply:** Nếu chủ dự án đổi nội dung FAQ/copy landing LẦN NỮA, chỉ cần sửa locale JSON (namespace `landing.*` trong `common.json`) — KHÔNG cần đụng `index.tsx` trừ khi đổi SỐ LƯỢNG câu FAQ (component `FaqSection` hiện hardcode mảng `[1,2,3,4]` theo số thứ tự key `faq_qN`/`faq_aN`).
