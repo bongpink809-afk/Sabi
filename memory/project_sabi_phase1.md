@@ -288,4 +288,30 @@ Cộng thêm: `Modal.tsx` (overlay/card dùng chung), `lib/format.ts` (`truncate
 
 **Lưu ý nếu heading nào khác sau này cũng bị wrap không mong muốn:** kiểm tra xem có đang bị `max-width` cố định nào bóp hẹp không trước khi chỉ dựa vào `text-wrap: balance` — 2 công cụ giải quyết 2 vấn đề khác nhau (balance = chia đều khi PHẢI wrap; nới max-width = tránh phải wrap).
 
-**Phát hiện phụ, CHƯA sửa (không phải do session này gây ra):** `landing.process_step4_desc` bản VI trong `common.json` có lỗi gõ — thiếu dấu cách "kháclên" (đúng ra "khác lên") + có 1 khoảng trắng thừa cuối câu ("...chỉ 20s "). Đây là nội dung chủ dự án tự sửa tay ngoài phiên làm việc (không phải AI viết), đã báo lại trong chat, chưa tự sửa vì không chắc có phải lỗi hay cố ý.
+**Phát hiện phụ, CHƯA sửa (không phải do session này gây ra):** `landing.process_step4_desc` bản VI trong `common.json` có lỗi gõ — thiếu dấu cách "kháclên" (đúng ra "khác lên") + có 1 khoảng trắng thừa cuối câu ("...chỉ 20s "). Đây là nội dung chủ dự án tự sửa tay ngoài phiên làm việc (không phải AI viết), đã báo lại trong chat, chưa tự sửa vì không chắc có phải lỗi hay cố ý. **Cập nhật: chủ dự án xác nhận đã tự sửa lỗi này rồi ở session sau — không còn pending.**
+
+---
+
+## Cập nhật (session sau — nội dung Process đổi sang luồng tạo bill, đồng nhất icon, bỏ caption Use Case, chỉnh spacing)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `frontend-rk/src/pages/index.tsx` + 2 file locale, không chạy lại test Solidity/Foundry.
+
+Handoff mới (`sabi-landing-v2-demo.html` + note trong chat, không phải file trong repo) yêu cầu 4 việc:
+
+1. **Nội dung Process đổi từ luồng thanh toán sang luồng TẠO bill** — trước đó 4 bước mô tả "chọn chain giữ USDC / ASSIGNED·OPEN_SLOT / ký 1 giao dịch / CCTP Fast Transfer 20s" (luồng người TRẢ tiền), giờ đổi thành luồng người TẠO bill: Connect wallet → Create a bill (Open Slot chia đều/Assigned gán số tiền) → Share the link → Check the bill (theo dõi ai đã trả). Đồng thời **bỏ hẳn 4 chip phụ** dưới mỗi bước (`Base · Arbitrum · Ethereum`, `ASSIGNED · OPEN_SLOT`, `1 signature · no swap`, `~20 seconds`) theo đúng yêu cầu chủ dự án — lý do nêu rõ trong handoff: "không đều nhau về nội dung nên bỏ, không cần khôi phục". Card footer đổi theo: "Every bill lives at **one link** — Sabi handles the cross-chain settlement via Circle CCTP V2." (VI: "Mỗi bill chỉ cần **1 link** — Sabi lo phần settle cross-chain qua Circle CCTP V2.").
+2. **Đồng nhất màu icon cả 4 bước Process** — trước đó bước 4 ("Check the bill"/lúc đó còn tên "Settled on Arc") có override riêng: icon nền/viền trắng, số thứ tự nền trắng chữ đen, packet animation (chạy dọc track) kết thúc màu trắng thay vì tím — không khớp 3 bước đầu (tông tím nhạt `rgba(153,142,255,...)`). Đã xoá toàn bộ override `.step:last-child .step-icon`/`.step:last-child .step-num`/`.step:last-child .step-chip` (chip đã xoá theo mục 1), sửa `@keyframes travel` mốc `100%` từ `background: white` sang `background: ${c.accent}` (#998EFF) + box-shadow tương ứng — cả 4 bước giờ dùng chung 1 style, không có ngoại lệ.
+3. **Use Case — bỏ dòng caption cuối** `"Arc Testnet · settles in ~20 seconds"` (key `landing.usecase_caption`) theo yêu cầu chủ dự án — đã xoá cả JSX (`<p className="usecases-caption">`) lẫn CSS class `.usecases-caption` (orphan do chính thay đổi này gây ra) lẫn key trong 2 file locale.
+4. **Chỉnh spacing Use Case → Process bằng Process → Stats:** trước đó `.usecases` có `padding: 32px 24px 80px` (bottom 80px) trong khi khoảng cách giữa khối Process (nền đen) và Stats (nền tím) chỉ có 56px (28px bottom-padding của `.block-wrap` bọc Process + 28px top-padding của `.block-wrap` bọc Stats) — nhìn mắt thường thấy Use Case→Process rộng hơn hẳn. Fix: đổi `.usecases` bottom-padding từ 80px xuống 28px, khớp đúng số liệu trong demo (`sabi-landing-v2-demo.html` có `.usecase { padding: 20px 0 28px; }`).
+
+**Verify (Playwright, cài tạm ở scratchpad, không phải dependency repo):**
+
+- Đo bằng `getBoundingClientRect()`: khoảng cách từ `.usecases-grid` (card use case cuối) tới card Process = 56px, khoảng cách từ card Process tới card Stats = 56px — **bằng nhau đúng như yêu cầu**, đo cho cả 2 locale (EN/VI).
+- Chụp screenshot full-page cả EN/VI xác nhận: Process không còn chip nào, cả 4 icon dùng chung tông tím (không còn icon trắng riêng ở bước 4), heading VI "Từ ví của bạn đến bill đã thanh toán xong" vẫn giữ đúng 1 dòng (fix từ session trước không bị ảnh hưởng bởi thay đổi lần này).
+- `npx tsc --noEmit` sạch, không lỗi TypeScript.
+- Phần Stats hiện trắng/rỗng trong screenshot full-page — đây là do `IntersectionObserver` chưa kịp fire lúc chụp ảnh full-page (hành vi reveal-on-scroll có sẵn từ session trước, không phải regression do session này gây ra, không nằm trong scope sửa).
+
+**File đổi:** `frontend-rk/src/pages/index.tsx` (component `ProcessSection`: bỏ field `chip` khỏi mảng `steps`, bỏ JSX `.step-chip`, bỏ CSS `.step-chip`/`.step:last-child *`, sửa `@keyframes travel`; bỏ JSX + CSS `.usecases-caption`; đổi `.usecases` padding-bottom), `frontend-rk/public/locales/{en,vi}/common.json` (đổi nội dung `process_step1-4_title/desc`, `process_foot_pre/bold/post`; xoá key `process_step1-4_chip` và `usecase_caption`).
+
+**Việc còn pending (không đổi so với trước, session này không chạm tới):** dán link Feedback Google Form thật; test tay điện thoại thật cho Share bill; theo dõi RPC "Failed to fetch" có tái diễn không.
+
+**How to apply:** Nếu chủ dự án đổi nội dung Process/Use Case lần nữa, sửa trực tiếp `common.json` namespace `landing.*` là đủ (không cần đụng `index.tsx` trừ khi đổi cấu trúc — vd thêm lại chip hoặc đổi số bước). Nếu cần fix phần Stats hiện trắng trong screenshot full-page sau này, nhớ đây là do `IntersectionObserver` + full-page screenshot, không phải bug — muốn chụp đúng phải cuộn thật qua từng phần trước khi chụp, không chỉ resize viewport.

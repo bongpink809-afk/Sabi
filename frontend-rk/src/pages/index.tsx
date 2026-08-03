@@ -141,7 +141,6 @@ const Landing: FC = () => {
               ))}
             </div>
 
-            <p className="usecases-caption">{t('landing.usecase_caption')}</p>
           </div>
         </section>
       </div>
@@ -249,7 +248,7 @@ const Landing: FC = () => {
         }
         .usecases {
           position: relative;
-          padding: 32px 24px 80px;
+          padding: 32px 24px 28px;
         }
         .usecases-inner {
           position: relative;
@@ -328,13 +327,6 @@ const Landing: FC = () => {
           line-height: 1.6;
           color: ${c.body};
         }
-        .usecases-caption {
-          margin: 56px 0 0;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: 12px;
-          color: ${c.caption};
-        }
-
         .page {
           max-width: 1080px;
           margin: 0 auto;
@@ -386,7 +378,6 @@ function ProcessSection() {
   const { t } = useTranslation('common')
   const steps = [
     {
-      chip: t('landing.process_step1_chip'),
       title: t('landing.process_step1_title'),
       desc: t('landing.process_step1_desc'),
       icon: (
@@ -398,7 +389,6 @@ function ProcessSection() {
       ),
     },
     {
-      chip: t('landing.process_step2_chip'),
       title: t('landing.process_step2_title'),
       desc: t('landing.process_step2_desc'),
       icon: (
@@ -414,7 +404,6 @@ function ProcessSection() {
       ),
     },
     {
-      chip: t('landing.process_step3_chip'),
       title: t('landing.process_step3_title'),
       desc: t('landing.process_step3_desc'),
       icon: (
@@ -425,7 +414,6 @@ function ProcessSection() {
       ),
     },
     {
-      chip: t('landing.process_step4_chip'),
       title: t('landing.process_step4_title'),
       desc: t('landing.process_step4_desc'),
       icon: (
@@ -461,7 +449,6 @@ function ProcessSection() {
                 </div>
                 <div className="step-title">{step.title}</div>
                 <div className="step-desc">{step.desc}</div>
-                <div className="step-chip">{step.chip}</div>
               </div>
             ))}
           </div>
@@ -562,8 +549,8 @@ function ProcessSection() {
           }
           100% {
             left: 100%;
-            background: white;
-            box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.2), 0 0 22px rgba(255, 255, 255, 0.9);
+            background: ${c.accent};
+            box-shadow: 0 0 0 6px rgba(153, 142, 255, 0.22), 0 0 22px rgba(153, 142, 255, 0.85);
           }
         }
         .steps {
@@ -597,10 +584,6 @@ function ProcessSection() {
           transform: translateY(-4px);
           box-shadow: 0 14px 30px rgba(153, 142, 255, 0.3);
         }
-        .step:last-child .step-icon {
-          background: linear-gradient(145deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
-          border: 1px solid rgba(255, 255, 255, 0.3);
-        }
         .step-icon :global(svg) {
           width: 30px;
           height: 30px;
@@ -621,10 +604,6 @@ function ProcessSection() {
           align-items: center;
           justify-content: center;
         }
-        .step:last-child .step-num {
-          background: white;
-          color: ${c.blackCard};
-        }
         .step-title {
           font-size: 14.5px;
           font-weight: 700;
@@ -635,19 +614,6 @@ function ProcessSection() {
           font-size: 12.5px;
           color: rgba(255, 255, 255, 0.55);
           line-height: 1.55;
-        }
-        .step-chip {
-          margin-top: 10px;
-          font-size: 10.5px;
-          font-weight: 700;
-          color: #c8c1ff;
-          background: rgba(153, 142, 255, 0.14);
-          padding: 4px 10px;
-          border-radius: 999px;
-        }
-        .step:last-child .step-chip {
-          color: ${c.blackCard};
-          background: white;
         }
         .card-foot {
           text-align: center;

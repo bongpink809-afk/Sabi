@@ -2,7 +2,26 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session fix heading Process bị wrap ở bản VI)
+## Cập nhật mới nhất (session sửa nội dung Process sang luồng tạo bill, đồng nhất icon, bỏ caption Use Case, chỉnh spacing)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `frontend-rk/src/pages/index.tsx` + 2 file locale, không chạy lại test Solidity/Foundry.
+
+Handoff mới (`sabi-landing-v2-demo.html` + note trong chat) yêu cầu 4 việc:
+
+1. **Nội dung Process đổi từ luồng thanh toán sang luồng TẠO bill:** 4 bước cũ mô tả góc nhìn người TRẢ tiền (chọn chain giữ USDC / ASSIGNED·OPEN_SLOT / ký giao dịch / CCTP 20s), giờ đổi sang góc nhìn người TẠO bill: Connect wallet → Create a bill (Open Slot chia đều/Assigned gán số tiền) → Share the link → Check the bill. **Bỏ hẳn 4 chip phụ** dưới mỗi bước (Base·Arbitrum·Ethereum, ASSIGNED·OPEN_SLOT, 1 signature·no swap, ~20 seconds) — chủ dự án yêu cầu rõ "không đều nhau về nội dung nên bỏ, không cần khôi phục". Card footer đổi thành "Every bill lives at **one link** — Sabi handles the cross-chain settlement via Circle CCTP V2." (VI tương ứng).
+2. **Đồng nhất màu icon cả 4 bước:** trước đó bước 4 có override riêng (icon/số thứ tự nền trắng, packet animation kết thúc màu trắng) không khớp 3 bước đầu (tông tím nhạt). Đã xoá hết override `.step:last-child *`, sửa `@keyframes travel` mốc 100% từ trắng sang tím (`${c.accent}`) — 4 bước giờ dùng chung 1 style.
+3. **Use Case — bỏ dòng caption cuối** "Arc Testnet · settles in ~20 seconds" (JSX + CSS class `.usecases-caption` + key locale, xoá cả 3 vì đây là orphan do chính thay đổi này).
+4. **Chỉnh spacing:** `.usecases` bottom-padding đổi từ 80px xuống 28px để khoảng cách Use Case→Process bằng khoảng cách Process→Stats (56px cả hai, đúng số liệu demo `sabi-landing-v2-demo.html`).
+
+**Verify (Playwright, cài tạm scratchpad):** đo `getBoundingClientRect()` xác nhận cả 2 khoảng cách đều 56px (EN + VI); screenshot full-page xác nhận Process không còn chip, 4 icon đồng nhất tím, heading VI Process vẫn đúng 1 dòng (fix session trước không bị ảnh hưởng); `npx tsc --noEmit` sạch. Phần Stats hiện trắng trong screenshot full-page là do `IntersectionObserver` reveal-on-scroll chưa kịp fire lúc chụp — hành vi có sẵn từ trước, không phải regression, ngoài scope session này.
+
+File đổi: `frontend-rk/src/pages/index.tsx` (`ProcessSection` + `.usecases`), `frontend-rk/public/locales/{en,vi}/common.json` (nội dung `process_step*`/`process_foot*` mới, xoá key `process_step*_chip` + `usecase_caption`).
+
+Việc còn pending (không đổi): dán link Feedback Google Form thật; test tay điện thoại thật cho Share bill; theo dõi RPC "Failed to fetch" có tái diễn không. Lỗi gõ VI ở `process_step4_desc` đã được chủ dự án tự sửa — không còn pending.
+
+Chi tiết: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session fix heading Process bị wrap ở bản VI)
 
 `text-wrap: balance` (thêm session trước) chỉ chia đều dòng khi BẮT BUỘC wrap, không giúp fit vừa 1 dòng. Heading Process bản VI vẫn xuống 2 dòng vì `.card-head` có `max-width: 560px` cứng (đủ cho bản Anh ngắn hơn). Fix: bỏ max-width khỏi `.card-head`, chuyển `max-width: 620px` sang riêng `.card-head p` (subtitle). Verify bằng Playwright đo `boundingBox`: height 40.5px (1 dòng) cho cả EN/VI.
 
