@@ -408,8 +408,12 @@ function ProcessSection() {
       desc: t('landing.process_step3_desc'),
       icon: (
         <svg viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="white" strokeWidth={1.6} />
-          <path d="M8.5 12h7M12.5 8.5l3.5 3.5-3.5 3.5" stroke="white" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M18 8a3 3 0 100-6 3 3 0 000 6zM6 15a3 3 0 100-6 3 3 0 000 6zm12 6a3 3 0 100-6 3 3 0 000 6zM8.6 13.5l6.8 3.9M15.4 6.6L8.6 10.5"
+            stroke="white"
+            strokeWidth={1.6}
+            strokeLinecap="round"
+          />
         </svg>
       ),
     },
