@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
-    "start": "next start"
+    "start": "next start",
+    "sync-firestore": "node scripts/sync-firestore.mjs"
   },
   "dependencies": {
     "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
@@ -23,10 +24,13 @@
     "wagmi": "^2.19.3"
   },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.0",
     "@types/node": "^24.12.2",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
+    "dotenv": "^16.4.5",
     "eslint-config-next": "^16.2.4",
+    "firebase-admin": "^13.0.2",
     "sharp": "^0.35.3",
     "typescript": "5.9.3"
   }

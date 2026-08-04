@@ -11,6 +11,8 @@ import {
   getDoc,
   getDocs,
   collection,
+  query,
+  where,
   setDoc,
   onSnapshot,
   serverTimestamp,
@@ -49,10 +51,28 @@ function getStorageInstance() {
 //
 //  Collection "bills" (dữ liệu bill — public, ai có billId cũng đọc được):
 //    bills/{billId}
-//      title:       string   — tên bill (creator viết lúc tạo)
-//      shareNames:  object   — { "0": "Lan Kim", "1": "Bảo" }
-//      slotNames:   object   — { "{txHash}": "Tên người góp" }
-//      updatedAt:   timestamp
+//      title:             string  — tên bill (creator viết lúc tạo, client ghi)
+//      shareNames:        object  — { "0": "Lan Kim", "1": "Bảo" } (client ghi)
+//      slotNames:         object  — { "{txHash}": "Tên người góp" } (client ghi, dữ liệu cũ)
+//      updatedAt:         timestamp
+//      ─── Phần dưới do script scripts/sync-firestore.mjs ghi (Admin SDK), đọc thẳng
+//      từ chain — KHÔNG ghi tay từ client, tránh script ghi đè lẫn nhau ───────────
+//      organizer:         string  — lowercase
+//      mode:              number  — 0 = ASSIGNED, 1 = OPEN_SLOT (khớp enum contract)
+//      totalAmount:       string  — uint256 dạng string (base units, 6 decimals)
+//      amountPerSlot:     string
+//      numSlots:          number
+//      matchedSlotsCount: number
+//      extraReceived:     string
+//      txHash:            string  — tx tạo bill (BillCreated)
+//      blockNumber:       number
+//      contributions:     BillContributionDoc[]  — mode OPEN_SLOT
+//      shares:            BillShareDoc[]         — mode ASSIGNED, luôn đủ numSlots phần tử
+//
+//  Collection "payments" (1 doc/lượt trả — dùng để tra "user X đã trả những gì",
+//  Firestore không query tốt trên field lồng trong array nên tách riêng):
+//    payments/{txHash}-{logIndex}
+//      billId, shareId (null nếu OPEN_SLOT), payer, amount, matched, txHash, blockNumber
 //
 //  Collection "users" (hồ sơ — chỉ owner ví này mới cần sync):
 //    users/{walletAddress}     ← lowercase, dùng luôn làm document ID
@@ -76,14 +96,58 @@ function getStorageInstance() {
 //   match /emailWallets/{email} {
 //     allow read, write: if true; // demo — production dùng auth
 //   }
+//   match /payments/{paymentId} {
+//     allow read: if true;   // client chỉ đọc — chỉ scripts/sync-firestore.mjs
+//     allow write: if false; // (Admin SDK) mới ghi được, bypass rule này
+//   }
 
 // ─── Type definitions ──────────────────────────────────────────────────────
+
+export interface BillContributionDoc {
+  payer: string
+  amount: string
+  matched: boolean
+  txHash: string
+  blockNumber: number
+}
+
+export interface BillShareDoc {
+  shareId: number
+  amount: string
+  paid: boolean
+  payer: string | null
+  txHash: string | null
+  blockNumber: number | null
+}
 
 export interface BillFirestoreData {
   title?: string
   shareNames?: Record<string, string>
   slotNames?: Record<string, string>
   updatedAt?: unknown
+  // Dữ liệu on-chain — do scripts/sync-firestore.mjs ghi, xem giải thích ở
+  // comment "Cấu trúc Firestore" phía trên.
+  organizer?: string
+  mode?: number
+  totalAmount?: string
+  amountPerSlot?: string
+  numSlots?: number
+  matchedSlotsCount?: number
+  extraReceived?: string
+  txHash?: string
+  blockNumber?: number
+  contributions?: BillContributionDoc[]
+  shares?: BillShareDoc[]
+}
+
+export interface PaymentDoc {
+  billId: string
+  shareId: number | null
+  payer: string
+  amount: string
+  matched: boolean | null
+  txHash: string
+  blockNumber: number
 }
 
 export interface UserFirestoreData {
@@ -182,6 +246,43 @@ export function listenToBill(
       console.warn('[Firebase] listenToBill error:', err)
     }
   )
+}
+
+/**
+ * Lấy toàn bộ bill do 1 địa chỉ ví tạo (field `organizer`, do sync-firestore.mjs
+ * ghi) — thay cho việc quét event BillCreated qua RPC ở trang Profile.
+ */
+export async function fetchBillsByOrganizer(
+  address: string
+): Promise<Array<{ billId: string } & BillFirestoreData>> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return []
+  try {
+    const db = getDb()
+    const q = query(collection(db, 'bills'), where('organizer', '==', address.toLowerCase()))
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => ({ billId: d.id, ...(d.data() as BillFirestoreData) }))
+  } catch (err) {
+    console.warn('[Firebase] fetchBillsByOrganizer failed:', err)
+    return []
+  }
+}
+
+/**
+ * Lấy toàn bộ lượt trả (SharePaid/SlotFilled) của 1 địa chỉ ví — collection
+ * "payments" riêng vì Firestore không query tốt trên field lồng trong array
+ * (contributions[].payer / shares[].payer nằm trong doc bill).
+ */
+export async function fetchPaymentsByPayer(address: string): Promise<PaymentDoc[]> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return []
+  try {
+    const db = getDb()
+    const q = query(collection(db, 'payments'), where('payer', '==', address.toLowerCase()))
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => d.data() as PaymentDoc)
+  } catch (err) {
+    console.warn('[Firebase] fetchPaymentsByPayer failed:', err)
+    return []
+  }
 }
 
 // ─── API: User profile ─────────────────────────────────────────────────────

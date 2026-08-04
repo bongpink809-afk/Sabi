@@ -2,7 +2,40 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (giới hạn trần retry/backoff + UI fallback cho bill detail cold-cache)
+## Cập nhật mới nhất (đổi kiến trúc đọc dữ liệu: RPC trực tiếp → Firestore đã index sẵn)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — đây là thay đổi kiến trúc lớn nhất từ trước tới giờ cho phần đọc dữ liệu hiển thị, chủ dự án đã xác nhận trực tiếp "hoạt động tốt" sau khi fix xong lượt bug đầu tiên, nhưng còn vài edge case chưa test tay (xem mục pending).
+
+**QUAN TRỌNG:** Toàn bộ lịch sử debug "RPC throttling trên Arc Testnet" ở các mục phía dưới (batch JSON-RPC, `concurrency.ts`, cache riêng/chung theo bill, retry cap 3 lần...) vẫn ĐÚNG về kỹ thuật và code vẫn còn nguyên trong repo (`eventScan.ts`, `concurrency.ts`, `rpcRetry.ts`, `wagmi.ts`'s `arcThrottledFetch` — không xoá, giữ làm fallback), nhưng **`bill/[id].tsx` và `useProfileData.ts` KHÔNG còn dùng những đường đó nữa** cho phần hiển thị bill/share/contribution/payment. Đường chính (hot path) đã đổi hẳn sang đọc Firestore.
+
+**Lý do đổi (bàn giao trực tiếp từ chủ dự án, deadline 9/8 không đổi):** Sau nhiều session tune retry/cache/throttle (xem lịch sử phía dưới) vẫn còn chậm/429 vì RPC public `rpc.testnet.arc.network` rate-limit chặt, không kiểm soát được từ phía app. Hướng mới: 1 script indexer chạy TAY (không cron) đọc on-chain rồi ghi sẵn vào Firestore, app chỉ đọc Firestore lúc user mở trang — bỏ hẳn phụ thuộc RPC-lúc-user-mở-trang cho phần hiển thị.
+
+**Kiến trúc mới:**
+
+1. **`frontend-rk/scripts/sync-firestore.mjs`** (mới, chạy `npm run sync-firestore` trong `frontend-rk`) — dùng Firebase Admin SDK (khác client SDK app dùng). Quét 3 event `BillCreated/SharePaid/SlotFilled` (tái dùng logic chunk 10.000 block + retry của `build-history-seed.mjs`, không sửa file đó), bootstrap lần đầu từ `public/data/onchain-history-seed.json` có sẵn, các lần sau chỉ quét tiếp từ checkpoint `_meta/sync.lastIndexedBlock` lưu TRÊN Firestore (không phải file local — chạy từ máy nào cũng nối đúng chỗ). Với MỖI bill có log mới: gọi thêm `getBill()`/`shareCount()`/`getShare()` qua RPC (bắt buộc — event `BillCreated` KHÔNG có `amountPerSlot`/`numSlots`/`matchedSlotsCount`/`extraReceived`, event `SharePaid` chỉ tồn tại cho share ĐÃ trả) rồi ghi đè `bills/{billId}` (merge, giữ nguyên `title`/`shareNames`/`slotNames` do client ghi trước đó). Dedupe log bằng `${transactionHash}:${logIndex}` — đúng key `dedupeLogs` đã dùng trong `eventScan.ts`.
+2. **Schema Firestore mới** (`frontend-rk/src/lib/firebase.ts`): `bills/{billId}` mở rộng thêm `organizer, mode, totalAmount, amountPerSlot, numSlots, matchedSlotsCount, extraReceived, txHash, blockNumber, contributions[], shares[]` (amount lưu string vì Firestore không có BigInt). Collection MỚI `payments/{txHash}-{logIndex}` (billId, shareId, payer, amount, matched, txHash, blockNumber) — tách riêng vì Firestore query kém trên field lồng trong array, dùng cho Profile tra "ví X đã trả gì" bằng 1 query thay vì quét RPC. `_meta/sync` — checkpoint `lastIndexedBlock` cho script.
+3. **`bill/[id].tsx`** — bỏ hẳn `useReadContract`(getBill/shareCount)/`useReadContracts`(getShare multicall)/`scanEventLogs`. Đọc qua `useBillSync` đã có sẵn (`onSnapshot` cùng doc `bills/{billId}` vốn chỉ dùng cho title/shareNames/slotNames trước đây — không thêm 1 lệnh `getDoc` riêng). **Optimistic overlay:** sau khi tx trả tiền (trực tiếp HOẶC cross-chain) confirm, ghi ngay state local đè lên Firestore lúc render — không đợi script sync chạy lại. Bỏ toàn bộ multicall + cơ chế partial-failure-retry cũ trong `AssignedShares`/`ShareRow` (không cần nữa, không multicall).
+4. **`useProfileData.ts`** — đổi sang `fetchBillsByOrganizer`/`fetchPaymentsByPayer` (Firestore) thay vì quét 3 event qua RPC. `useBillsProgress` viết lại thành hàm derive thuần (`useMemo`, không RPC/Firestore nào) từ field có sẵn trong `CreatedBill`.
+5. **`create.tsx`** — **gotcha tìm ra lúc chủ dự án test thật, đã fix:** ban đầu chỉ ghi `title`/`shareNames` lên Firestore ngay sau tạo bill, KHÔNG ghi field on-chain (`organizer/mode/totalAmount/...`, chỉ có sau khi chạy script). Hậu quả: tạo bill xong `router.push` ngay → "bill not found" vì Firestore chưa có `totalAmount`. Fix: ghi optimistic ngay tại `create.tsx` (gọi `updateBillData` trực tiếp, cùng shape script sẽ ghi đè sau) qua CLIENT SDK (rule `bills` vốn đã `allow write: if true`).
+
+**Bug/gotcha khác gặp khi chủ dự án tự chạy thật lần đầu:**
+- `firebase-admin` kéo theo `@google-cloud/firestore` nhưng npm KHÔNG tự cài `@opentelemetry/api` (dependency thật của nó, không phải optional) → script crash `MODULE_NOT_FOUND`. Fix: thêm thẳng vào `devDependencies`.
+- Collection `payments` mới KHÔNG có Firestore Security Rule → Firestore mặc định deny-all → `/profile` phần "Bills paid" luôn rỗng dù có dữ liệu thật (lỗi bị nuốt im lặng trong try/catch của `fetchPaymentsByPayer`, không hiện gì ở UI/console rõ ràng). Đây là thao tác CONSOLE, không phải code — đã hướng dẫn chủ dự án tự thêm rule `match /payments/{paymentId} { allow read: if true; allow write: if false; }` qua Firebase Console, xác nhận hoạt động sau khi Publish.
+- Chủ dự án yêu cầu xoá dữ liệu bill 35 và 36 khỏi Firestore (dọn dữ liệu test cũ, không phải bug) — đã xoá `bills/35`, `bills/36` + 4 doc `payments` của bill 36 bằng 1 script tạm (Admin SDK, KHÔNG commit vào repo). **Ghi chú quan trọng cho session sau:** vì script chỉ đụng bill có log MỚI trong lần quét, 2 bill này sẽ KHÔNG tự xuất hiện lại ở lần sync tiếp theo trừ khi có hoạt động on-chain mới cho đúng billId đó, hoặc bootstrap lại từ đầu (xoá doc `_meta/sync` rồi chạy lại script).
+
+**Không đổi (out of scope, cố ý):** `useLandingStats.ts` (trang `/`) vẫn quét RPC như cũ. `profile.tsx`'s `PaymentRow` vẫn tự gọi `getTransaction(txHash)` qua RPC cho từng dòng payment (đã bọc retry/rate-limiter từ session trước) — chỉ để lấy thêm chi tiết hiển thị, không phải nguồn dữ liệu chính.
+
+**Đã verify:** `npx tsc --noEmit` + `npm run build` sạch. Script chạy thật với credentials thật của chủ dự án (service account key tự lấy từ Firebase Console, KHÔNG commit — chỉ copy `client_email`/`private_key` vào `FIREBASE_ADMIN_CLIENT_EMAIL`/`FIREBASE_ADMIN_PRIVATE_KEY` trong `.env.local`, đã gitignore từ trước). Chủ dự án xác nhận trực tiếp: `/profile` hiện đúng cả "Bills created" và "Bills paid", tạo bill mới không còn "bill not found".
+
+**CHƯA verify (pending):** optimistic overlay cho đường trả tiền CROSS-CHAIN (chỉ đường trực tiếp trên Arc đã được xác nhận); race condition 2 người trả cùng lúc 1 bill; `README.md` gốc repo CHƯA cập nhật để phản ánh kiến trúc mới (vẫn mô tả Firestore chỉ dùng cho "bill titles, profile names", thiếu `FIREBASE_ADMIN_*`/script `sync-firestore.mjs`/collection `payments` trong "Getting started") — chưa sửa vì không nằm trong yêu cầu session này.
+
+**Việc cần làm trước mỗi lần demo (vận hành, không phải code):** chạy `npm run sync-firestore` (trong `frontend-rk`) để đồng bộ dữ liệu payment mới nhất lên Firestore trước khi cho người khác xem.
+
+**How to apply:** Nếu Firestore trả về mảng rỗng bất thường dù có dữ liệu thật, luôn kiểm tra Security Rules trước (console warning `[Firebase] fetch...failed` bị nuốt im lặng trong try/catch, dễ nhầm "không có dữ liệu" thay vì "bị chặn quyền") — đúng bug đã gặp với `payments` ở session này.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (giới hạn trần retry/backoff + UI fallback cho bill detail cold-cache)
 
 Bàn giao phát hiện: mở 1 bill hoàn toàn mới (cold cache, kịch bản demo khả năng cao nhất) mất tới 31s dù đã có `fetchFn`/throttle và revert cache riêng-theo-bill. Chẩn đoán gốc trong bàn giao đề xuất sửa `withRetry429` (5 lần/backoff x2, ~24.8s) — **đã chỉnh 1 điểm trước khi implement:** `getBill` (query quyết định "Loading bill info..." biến mất lúc nào) **không dùng `withRetry429`**, nó dùng `rpcRetryQueryOptions` trong `rpcRetry.ts` — cơ chế RIÊNG (react-query retry, cũng ~22s). Sửa cả 2 mới thật sự đạt mục tiêu.
 

@@ -43,7 +43,7 @@ function getBillTitleFromMap(billId: bigint, firestoreTitles: Record<string, str
 const Profile: NextPage = () => {
   const { t } = useTranslation('common')
   const { address, isConnected } = useAccount()
-  const { billsCreated, paymentsMade, totalContributed, paidShareCountByBillId, isLoading, isError, refetch } = useProfileData(address)
+  const { billsCreated, paymentsMade, totalContributed, isLoading, isError, refetch } = useProfileData(address)
   const [createdPage, setCreatedPage] = useState(0)
   const [paidPage, setPaidPage] = useState(0)
 
@@ -160,10 +160,7 @@ const Profile: NextPage = () => {
 
   // Badge "ĐANG THU"/"ĐÃ ĐỦ" — chỉ tính cho các bill đang hiện (multicall 1 lần,
   // không tính hết toàn bộ billsCreated để tránh phình request khi list dài)
-  const billsProgress = useBillsProgress(
-    visibleCreated.map((b) => b.billId),
-    paidShareCountByBillId
-  )
+  const billsProgress = useBillsProgress(visibleCreated)
 
   return (
     <div style={wrap}>

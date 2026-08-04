@@ -36,3 +36,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# indexer checkpoint (local scan progress, không phải nguồn sự thật)
+scripts/.seed-checkpoint.json

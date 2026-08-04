@@ -13,6 +13,7 @@ import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
 import { colors } from '../styles/theme'
 import { ModeCard } from '../components/ModeCard'
 import { saveBillTitle, saveBillShareNames } from '../hooks/useFirebaseSync'
+import { updateBillData } from '../lib/firebase'
 
 import { SabiHeader } from '../components/SabiHeader'
 import { SabiLogo } from '../components/SabiLogo'
@@ -37,7 +38,7 @@ interface ShareRow {
 const Home: NextPage = () => {
   const router = useRouter()
   const { t } = useTranslation('common')
-  const { isConnected } = useAccount()
+  const { isConnected, address } = useAccount()
   const [mode, setMode] = useState<BillMode>('ASSIGNED')
   const [billName, setBillName] = useState('')
   const { chainId: currentChainId } = useAccount()
@@ -90,6 +91,52 @@ const Home: NextPage = () => {
         if (logs.length > 0) {
           const newBillId = logs[0].args.billId as bigint
           const billIdStr = newBillId.toString()
+
+          // Ghi ngay dữ liệu on-chain lên Firestore (client SDK) — script
+          // scripts/sync-firestore.mjs chỉ chạy tay trước demo nên KHÔNG kịp
+          // có ngay lúc này; thiếu bước này trang /bill/[id] sẽ hiện "not found"
+          // cho tới lần sync kế tiếp. Ghi optimistic ở đây, script sau này ghi
+          // đè lại bằng dữ liệu đọc thật từ chain (merge:true, không xung đột).
+          if (address && receipt) {
+            if (mode === 'ASSIGNED') {
+              const amounts = shares.filter((s) => s.amount).map((s) => parseUnits(s.amount, 6))
+              const totalAmount = amounts.reduce((sum, a) => sum + a, 0n)
+              updateBillData(billIdStr, {
+                organizer: address.toLowerCase(),
+                mode: 0,
+                totalAmount: totalAmount.toString(),
+                amountPerSlot: '0',
+                numSlots: 0,
+                matchedSlotsCount: 0,
+                extraReceived: '0',
+                txHash,
+                blockNumber: Number(receipt.blockNumber),
+                shares: amounts.map((amt, i) => ({
+                  shareId: i,
+                  amount: amt.toString(),
+                  paid: false,
+                  payer: null,
+                  txHash: null,
+                  blockNumber: null,
+                })),
+              })
+            } else {
+              const amountPerSlotWei = parseUnits(amountPerSlotComputed.toFixed(6), 6)
+              const totalAmount = amountPerSlotWei * BigInt(numSlotsInt)
+              updateBillData(billIdStr, {
+                organizer: address.toLowerCase(),
+                mode: 1,
+                totalAmount: totalAmount.toString(),
+                amountPerSlot: amountPerSlotWei.toString(),
+                numSlots: numSlotsInt,
+                matchedSlotsCount: 0,
+                extraReceived: '0',
+                txHash,
+                blockNumber: Number(receipt.blockNumber),
+                contributions: [],
+              })
+            }
+          }
 
           // Lưu tên các share vào localStorage + Firebase Firestore —
           // Firestore cho phép thiết bị khác đọc được tên ngay sau khi tạo.

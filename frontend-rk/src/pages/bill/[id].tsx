@@ -1,5 +1,5 @@
 import { CrossChainState } from '../../hooks/useCrossChainPayment'
-import { useAccount, useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt, usePublicClient, useSwitchChain } from 'wagmi'
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
 import type { NextPage, GetServerSideProps } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
@@ -9,7 +9,6 @@ import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
 import { formatUnits } from 'viem'
 import { sepolia } from 'wagmi/chains'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
-import { scanEventLogs, withRetry429 } from '../../lib/eventScan'
 import { rpcRetryQueryOptions } from '../../lib/rpcRetry'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
 import { PaymentChainModal } from '../../components/PaymentChainModal'
@@ -24,8 +23,7 @@ import { SourceChain } from '../../hooks/useBurnCrossChain'
 import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
-import { useRetryOnPartialFailure } from '../../hooks/useRetryPartialMulticall'
-import type { UserFirestoreData } from '../../lib/firebase'
+import type { UserFirestoreData, BillContributionDoc, BillShareDoc, BillFirestoreData } from '../../lib/firebase'
 import { useCircleWallet, useCircleContractCall } from '../../contexts/CircleWalletContext'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
@@ -92,7 +90,6 @@ const BillDetail: NextPage = () => {
   const isCircleActive = circleStatus === 'ready' && !connectedAddress
   const effectiveAddress = connectedAddress ?? (isCircleActive ? circleWalletAddress ?? undefined : undefined)
   const effectivePayMethod: PayMethod = isCircleActive ? 'arc' : payMethod
-  const publicClient = usePublicClient({ chainId: arcTestnet.id })
   const [shareNames, setShareNames] = useState<LocalShareNames>({})
   const [billTitle, setBillTitle] = useState<string | null>(null)
   const [payingShareId, setPayingShareId] = useState<number | null>(null)
@@ -100,21 +97,17 @@ const BillDetail: NextPage = () => {
   // hash đã confirm của từng share — lưu bền để không mất khi F5 lại trang
   const [paidTxHashes, setPaidTxHashes] = useState<Record<number, `0x${string}`>>({})
 
-  // Trạng thái trả/amount của từng share (mode ASSIGNED) — ShareRow tự đọc chain
-  // rồi "báo cáo" lên đây để tính tiến độ tổng (panel "Tiến độ thu tiền"),
-  // tránh phải đọc lại toàn bộ share 1 lần nữa ở component cha.
-  const [shareProgress, setShareProgress] = useState<Record<number, { paid: boolean; amount: bigint }>>({})
-  const reportShareProgress = (shareId: number, paid: boolean, amount: bigint) => {
-    setShareProgress((prev) => {
-      const cur = prev[shareId]
-      if (cur && cur.paid === paid && cur.amount === amount) return prev
-      return { ...prev, [shareId]: { paid, amount } }
-    })
-  }
+  // ─── Dữ liệu on-chain của bill — đọc từ Firestore (script scripts/sync-firestore.mjs
+  // ghi từ chain), nhận qua đúng subscription useBillSync đã có sẵn cho
+  // title/shareNames/slotNames (cùng 1 document bills/{billId}) — không còn gọi RPC.
+  const [onchainBill, setOnchainBill] = useState<BillFirestoreData | null>(null)
+  const [billLoaded, setBillLoaded] = useState(false)
 
-  // ─── Danh sách người đã góp (mode OPEN_SLOT) — đọc từ event log trên chain ──
-  const [contributions, setContributions] = useState<Contribution[]>([])
-  const [isLoadingContributions, setIsLoadingContributions] = useState(false)
+  // Optimistic overlay — áp ngay khi CHÍNH PHIÊN NÀY vừa trả xong (trực tiếp
+  // hoặc cross-chain), không đợi script sync-firestore chạy lại mới thấy cập nhật.
+  const [optimisticContributions, setOptimisticContributions] = useState<BillContributionDoc[]>([])
+  const [optimisticShares, setOptimisticShares] = useState<Record<number, { payer: string; txHash: `0x${string}` }>>({})
+
   // Tên tự đặt cho từng địa chỉ ví (dữ liệu cũ, trước khi có avatar/tên hồ sơ) —
   // lưu local theo billId, key là address viết thường. Vẫn giữ đọc để không mất
   // tên đã lưu từ trước, nhưng không còn ghi thêm (xem `profiles` bên dưới).
@@ -124,63 +117,22 @@ const BillDetail: NextPage = () => {
   // Firestore theo địa chỉ payer thật (không cần ai gõ tên tay nữa).
   const [profiles, setProfiles] = useState<Record<string, UserFirestoreData>>({})
 
-  const fetchContributions = async () => {
-    if (billId === undefined || !publicClient) return
-    setIsLoadingContributions(true)
-    try {
-      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
-      // Cache key RIÊNG theo billId — filter server-side qua args ở getContractEvents
-      // (billId có indexed) để mỗi response chỉ chứa log của đúng bill đang xem, giảm
-      // rủi ro trước demo (deadline gần). Đánh đổi: mất khả năng chia sẻ cache giữa
-      // các bill khác nhau — chấp nhận được, xem memory để biết quyết định đầy đủ.
-      const allLogs = await scanEventLogs(publicClient, 'SlotFilled', { billId }, latestBlock, `sabi-scan-SlotFilled-${billId}`)
-
-      const list: Contribution[] = allLogs.map((log: any) => ({
-        payer: log.args.payer,
-        amount: log.args.amount,
-        matched: log.args.matched,
-        txHash: log.transactionHash,
-      }))
-      setContributions(list)
-    } catch (err) {
-      console.error('Lỗi đọc lịch sử góp tiền:', err)
-    } finally {
-      setIsLoadingContributions(false)
-    }
+  const recordOptimisticSharePaid = (shareId: number, txHash: `0x${string}`) => {
+    if (!effectiveAddress) return
+    setOptimisticShares((prev) => ({ ...prev, [shareId]: { payer: effectiveAddress.toLowerCase(), txHash } }))
   }
-
-  // ─── Địa chỉ ví đã trả từng share (mode ASSIGNED) — đọc từ event SharePaid,
-  // event này CÓ payer (contract có lưu, chỉ là trước đây frontend chưa đọc) —
-  // dùng để hiện ví thay cho "Phần #n" ở hoá đơn khi share đã trả nhưng chưa đặt tên.
-  const [sharePayers, setSharePayers] = useState<Record<number, `0x${string}`>>({})
-  // Hash tx đã trả từng share — đọc thẳng từ event log (giống contributions.txHash
-  // bên OPEN_SLOT), nên luôn có kể cả khi share được trả từ thiết bị/phiên khác,
-  // không phụ thuộc state phiên hiện tại (payTxHash chỉ có nếu trả ngay trong phiên này).
-  const [sharePaidTxHashes, setSharePaidTxHashes] = useState<Record<number, `0x${string}`>>({})
-
-  const fetchSharePayers = async () => {
-    if (billId === undefined || !publicClient) return
-    try {
-      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
-      // Cache key riêng theo billId — xem giải thích ở fetchContributions phía trên.
-      const allLogs = await scanEventLogs(publicClient, 'SharePaid', { billId }, latestBlock, `sabi-scan-SharePaid-${billId}`)
-      const payerMap: Record<number, `0x${string}`> = {}
-      const hashMap: Record<number, `0x${string}`> = {}
-      allLogs.forEach((log: any) => {
-        const shareId = Number(log.args.shareId)
-        payerMap[shareId] = log.args.payer
-        hashMap[shareId] = log.transactionHash
-      })
-      setSharePayers(payerMap)
-      setSharePaidTxHashes(hashMap)
-    } catch (err) {
-      console.error('Lỗi đọc địa chỉ ví đã trả share:', err)
-    }
+  const recordOptimisticContribution = (amount: bigint, txHash: `0x${string}`) => {
+    if (!effectiveAddress) return
+    setOptimisticContributions((prev) => {
+      if (prev.some((c) => c.txHash.toLowerCase() === txHash.toLowerCase())) return prev
+      return [...prev, { payer: effectiveAddress.toLowerCase(), amount: amount.toString(), matched: true, txHash, blockNumber: 0 }]
+    })
   }
 
   // ─── Firebase Firestore realtime sync ─────────────────────────────────────
-  // Khi thiết bị khác (PC/Phone) ghi tên bill hoặc tên share lên Firestore,
-  // hook này tự cập nhật localStorage + setState → UI render lại ngay.
+  // Khi thiết bị khác (PC/Phone) ghi tên bill/tên share, HOẶC script sync-firestore
+  // ghi dữ liệu on-chain mới, hook này tự cập nhật state → UI render lại ngay,
+  // không cần F5.
   useBillSync(billId !== undefined ? billId.toString() : undefined, (data) => {
     if (data.title) {
       setBillTitle(data.title)
@@ -194,15 +146,62 @@ const BillDetail: NextPage = () => {
     if (data.slotNames) {
       setSlotNames((prev) => ({ ...prev, ...data.slotNames }))
     }
+    setOnchainBill(data)
+    setBillLoaded(true)
   })
 
+  const mode = onchainBill?.mode === 0 ? 'ASSIGNED' : onchainBill?.mode === 1 ? 'OPEN_SLOT' : undefined
+
+  const bill =
+    onchainBill && onchainBill.totalAmount !== undefined
+      ? {
+          organizer: onchainBill.organizer as `0x${string}`,
+          mode: onchainBill.mode!,
+          totalAmount: BigInt(onchainBill.totalAmount),
+          amountPerSlot: BigInt(onchainBill.amountPerSlot ?? '0'),
+          numSlots: BigInt(onchainBill.numSlots ?? 0),
+          matchedSlotsCount: BigInt(onchainBill.matchedSlotsCount ?? 0),
+          extraReceived: BigInt(onchainBill.extraReceived ?? '0'),
+        }
+      : undefined
+
+  const shareCount = onchainBill?.shares?.length ?? 0
+
+  // shares/contributions = dữ liệu Firestore ghép với optimistic overlay của phiên này
+  const shares: BillShareDoc[] = (onchainBill?.shares ?? []).map((s) => {
+    const o = optimisticShares[s.shareId]
+    return o ? { ...s, paid: true, payer: o.payer, txHash: o.txHash } : s
+  })
+
+  const contributions: Contribution[] = (() => {
+    const fromFirestore: Contribution[] = (onchainBill?.contributions ?? []).map((c) => ({
+      payer: c.payer as `0x${string}`,
+      amount: BigInt(c.amount),
+      matched: c.matched,
+      txHash: c.txHash as `0x${string}`,
+    }))
+    const knownHashes = new Set(fromFirestore.map((c) => c.txHash.toLowerCase()))
+    const extra: Contribution[] = optimisticContributions
+      .filter((c) => !knownHashes.has(c.txHash.toLowerCase()))
+      .map((c) => ({ payer: c.payer as `0x${string}`, amount: BigInt(c.amount), matched: c.matched, txHash: c.txHash as `0x${string}` }))
+    return [...fromFirestore, ...extra]
+  })()
+
   // Lấy hồ sơ (avatar + tên) của mọi địa chỉ ví đã trả bill này — cả OPEN_SLOT
-  // (contributions) lẫn ASSIGNED (sharePayers) — để hoá đơn hiện avatar/tên
-  // thật thay vì phải gõ tay.
+  // (contributions) lẫn ASSIGNED (shares) — để hoá đơn hiện avatar/tên thật
+  // thay vì phải gõ tay.
   const profileAddresses = Array.from(
-    new Set([...contributions.map((c) => c.payer), ...Object.values(sharePayers)])
+    new Set([
+      ...contributions.map((c) => c.payer),
+      ...shares.filter((s): s is BillShareDoc & { payer: string } => !!s.payer).map((s) => s.payer as `0x${string}`),
+    ])
   )
   useProfilesSync(profileAddresses, (fetched) => {
+    setProfiles((prev) => ({ ...prev, ...fetched }))
+  })
+
+  // Hồ sơ (tên) của người tạo bill — dùng cho shareText của nút "Chia sẻ bill".
+  useProfilesSync(bill ? [bill.organizer] : [], (fetched) => {
     setProfiles((prev) => ({ ...prev, ...fetched }))
   })
 
@@ -218,50 +217,7 @@ const BillDetail: NextPage = () => {
     saveSingleShareName(billId.toString(), shareId, name, shareNames)
   }
 
-  // ─── Đọc thông tin bill ───────────────────────────────────────────────────
-  const {
-    data: bill,
-    isLoading: isBillLoading,
-    error: billError,
-    refetch: refetchBill,
-  } = useReadContract({
-    address: SABI_BILL_ADDRESS,
-    abi: SABI_BILL_ABI,
-    functionName: 'getBill',
-    args: billId !== undefined ? [billId] : undefined,
-    chainId: arcTestnet.id,
-    query: {
-      enabled: billId !== undefined,
-      refetchOnWindowFocus: false,
-      staleTime: 30_000,
-      ...rpcRetryQueryOptions,
-    },
-  })
-
-  // Hồ sơ (tên) của người tạo bill — dùng cho shareText của nút "Chia sẻ bill".
-  // Tách riêng khỏi useProfilesSync ở trên vì địa chỉ organizer chỉ có được sau
-  // khi đọc xong getBill, không gộp chung profileAddresses (computed trước đó) được.
-  useProfilesSync(bill ? [bill.organizer] : [], (fetched) => {
-    setProfiles((prev) => ({ ...prev, ...fetched }))
-  })
-
-  // bill.mode: 0 = ASSIGNED, 1 = OPEN_SLOT (theo enum BillMode trong SabiBill.sol)
-  const mode = bill ? (bill.mode === 0 ? 'ASSIGNED' : 'OPEN_SLOT') : undefined
-
-  // shareCount KHÔNG nằm trong struct Bill — nó là mapping riêng: shareCount(billId)
-  const { data: shareCount } = useReadContract({
-    address: SABI_BILL_ADDRESS,
-    abi: SABI_BILL_ABI,
-    functionName: 'shareCount',
-    args: billId !== undefined ? [billId] : undefined,
-    chainId: arcTestnet.id,
-    query: {
-      enabled: billId !== undefined && mode === 'ASSIGNED',
-      refetchOnWindowFocus: false,
-      staleTime: 30_000,
-      ...rpcRetryQueryOptions,
-    },
-  })
+  const isBillLoading = billId !== undefined && !billLoaded
 
   // ─── Đọc tên người tham gia + hash đã trả trước đó, lưu local lúc tạo/trả bill ──
   useEffect(() => {
@@ -294,19 +250,6 @@ const BillDetail: NextPage = () => {
     if (rawTitle) setBillTitle(rawTitle)
   }, [billId])
 
-  // Chỉ quét đúng loại event khớp mode của bill — trước đây gọi cả 2 hàm bất
-  // kể mode, ASSIGNED vẫn quét SlotFilled (event của OPEN_SLOT, không bao giờ
-  // khớp billId), tốn gấp đôi số request lên cùng 1 RPC rate-limit chặt,
-  // khiến các request cần thiết khác (đọc share) cũng bị 429 lây theo.
-  useEffect(() => {
-    if (billId === undefined || mode === undefined) return
-    if (mode === 'OPEN_SLOT') {
-      fetchContributions()
-    } else {
-      fetchSharePayers()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [billId, mode])
     // Khôi phục share đang xử lý dở sau khi F5 — quét localStorage tìm giao dịch cross-chain chưa xong
     useEffect(() => {
       if (billId === undefined) return
@@ -437,26 +380,21 @@ const BillDetail: NextPage = () => {
   const mergedSlotConfirmed = isCircleActive ? circlePaySlot.isSuccess : isSlotConfirmed
   const mergedPaySlotError = isCircleActive ? circlePaySlot.error : paySlotError
 
-  // Event SlotFilled có thể chưa kịp index ngay lúc tx vừa confirm (RPC lag) —
-  // thử lại 1 lần sau 6s, giống hệt cơ chế đã dùng cho cross-chain, để không
-  // phải F5 mới thấy dòng góp tiền mới.
+  // Trả trực tiếp xong → ghi ngay vào optimistic state (không đợi script
+  // sync-firestore chạy lại mới thấy cập nhật, xem recordOptimisticContribution).
   useEffect(() => {
-    if (!mergedSlotConfirmed) return
-    refetchBill()
-    fetchContributions()
-    const retry = setTimeout(fetchContributions, 6000)
-    return () => clearTimeout(retry)
-  }, [mergedSlotConfirmed])
+    if (!mergedSlotConfirmed || !bill || !mergedPaySlotTx) return
+    recordOptimisticContribution(bill.amountPerSlot, mergedPaySlotTx)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedSlotConfirmed, mergedPaySlotTx])
 
-  // Trả trực tiếp 1 share xong → kéo lại ví đã trả (SharePaid) để hoá đơn hiện
-  // đúng địa chỉ thay vì "Phần #n" mãi mãi. Cùng lý do RPC lag như trên — thử
-  // lại 1 lần sau 6s.
+  // Trả trực tiếp 1 share xong → ghi ngay optimistic (payer = ví đang trả) để
+  // hoá đơn hiện đúng địa chỉ thay vì "Phần #n" mãi mãi.
   useEffect(() => {
-    if (!mergedShareConfirmed) return
-    fetchSharePayers()
-    const retry = setTimeout(fetchSharePayers, 6000)
-    return () => clearTimeout(retry)
-  }, [mergedShareConfirmed])
+    if (!mergedShareConfirmed || payingShareId === null || !mergedPayShareTx) return
+    recordOptimisticSharePaid(payingShareId, mergedPayShareTx)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedShareConfirmed, mergedPayShareTx])
 
   const handlePayShare = (shareId: number) => {
   if (billId === undefined) return
@@ -507,34 +445,6 @@ const BillDetail: NextPage = () => {
     return <Centered>{t('bill.loading_info')}</Centered>
   }
 
-  // Tách riêng billError (lỗi RPC/hết retry — có thể thật ra bill vẫn tồn
-  // tại, chỉ là chưa đọc được) khỏi !bill (query thành công nhưng không có
-  // dữ liệu) — trước đây gộp chung thành "Bill not found", khiến 1 lần RPC
-  // nghẽn/429 hết retry hiện nhầm thành "bill không tồn tại" dù bill vẫn ở
-  // đó, và không có cách nào thử lại ngoài F5 cả trang.
-  if (billError) {
-    return (
-      <Centered>
-        <p style={{ color: colors.danger, marginBottom: 8 }}>{t('bill.load_error')}</p>
-        <button
-          onClick={() => refetchBill()}
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: colors.danger,
-            background: 'none',
-            border: `1px solid ${colors.danger}`,
-            borderRadius: 6,
-            padding: '6px 14px',
-            cursor: 'pointer',
-          }}
-        >
-          {t('bill.retry')}
-        </button>
-      </Centered>
-    )
-  }
-
   if (!bill) {
     return (
       <Centered>
@@ -546,9 +456,9 @@ const BillDetail: NextPage = () => {
     )
   }
 
-  // Tiến độ thu tiền — ASSIGNED dùng state "nâng lên" từ từng ShareRow (đọc chain
-  // riêng từng share), OPEN_SLOT dùng thẳng số liệu có sẵn trên bill + tổng contributions.
-  const assignedProgressValues = Object.values(shareProgress)
+  // Tiến độ thu tiền — ASSIGNED derive thẳng từ `shares` (đã có sẵn từ Firestore
+  // + optimistic overlay), OPEN_SLOT dùng thẳng số liệu có sẵn trên bill + tổng contributions.
+  const assignedProgressValues = shares.map((s) => ({ paid: s.paid, amount: BigInt(s.amount) }))
   const progressCount =
     mode === 'ASSIGNED' ? assignedProgressValues.filter((s) => s.paid).length : Number(bill.matchedSlotsCount ?? 0)
   const progressTotalCount = mode === 'ASSIGNED' ? Number(shareCount ?? 0) : Number(bill.numSlots ?? 0)
@@ -600,7 +510,7 @@ const BillDetail: NextPage = () => {
               mode={mode}
               shareCount={Number(shareCount ?? 0)}
               shareNames={shareNames}
-              shareProgress={shareProgress}
+              shares={shares}
               amountPerSlot={bill.amountPerSlot}
               matchedSlotsCount={Number(bill.matchedSlotsCount ?? 0)}
               numSlots={Number(bill.numSlots ?? 0)}
@@ -609,7 +519,6 @@ const BillDetail: NextPage = () => {
               isWalletConnected={!!effectiveAddress}
               contributions={contributions}
               slotNames={slotNames}
-              sharePayers={sharePayers}
               profiles={profiles}
             />
 
@@ -680,10 +589,8 @@ const BillDetail: NextPage = () => {
               <AssignedShares
                 billId={billId}
                 totalAmount={bill.totalAmount}
-                shareCount={Number(shareCount ?? 0)}
+                shares={shares}
                 shareNames={shareNames}
-                sharePayers={sharePayers}
-                sharePaidTxHashes={sharePaidTxHashes}
                 profiles={profiles}
                 connectedAddress={connectedAddress}
                 signerAddress={effectiveAddress}
@@ -701,8 +608,7 @@ const BillDetail: NextPage = () => {
                 paySuccess={mergedShareConfirmed}
                 payError={mergedPayShareError}
                 payMethod={effectivePayMethod}
-                onShareLoaded={reportShareProgress}
-                onCrossChainSuccess={fetchSharePayers}
+                onCrossChainSuccess={recordOptimisticSharePaid}
               />
             )}
 
@@ -721,14 +627,11 @@ const BillDetail: NextPage = () => {
                 paySuccess={mergedSlotConfirmed}
                 payError={mergedPaySlotError}
                 contributions={contributions}
-                isLoadingContributions={isLoadingContributions}
+                isLoadingContributions={!billLoaded}
                 slotNames={slotNames}
                 profiles={profiles}
                 payMethod={effectivePayMethod}
-                onCrossChainSuccess={() => {
-                  refetchBill()
-                  fetchContributions()
-                }}
+                onCrossChainSuccess={(txHash) => recordOptimisticContribution(bill.amountPerSlot, txHash)}
               />
             )}
             </div>
@@ -781,7 +684,7 @@ function ReceiptCard({
   mode,
   shareCount,
   shareNames,
-  shareProgress,
+  shares,
   amountPerSlot,
   matchedSlotsCount,
   numSlots,
@@ -790,7 +693,6 @@ function ReceiptCard({
   isWalletConnected,
   contributions,
   slotNames,
-  sharePayers,
   profiles,
 }: {
   billId: bigint
@@ -798,7 +700,7 @@ function ReceiptCard({
   mode: 'ASSIGNED' | 'OPEN_SLOT' | undefined
   shareCount: number
   shareNames: LocalShareNames
-  shareProgress: Record<number, { paid: boolean; amount: bigint }>
+  shares: BillShareDoc[]
   amountPerSlot: bigint
   matchedSlotsCount: number
   numSlots: number
@@ -807,7 +709,6 @@ function ReceiptCard({
   isWalletConnected: boolean
   contributions: Contribution[]
   slotNames: Record<string, string>
-  sharePayers: Record<number, `0x${string}`>
   profiles: Record<string, UserFirestoreData>
 }) {
   const { t } = useTranslation('common')
@@ -831,7 +732,8 @@ function ReceiptCard({
   const shareRows =
     mode === 'ASSIGNED'
       ? Array.from({ length: shareCount }, (_, i) => i).map((shareId) => {
-          const payer = sharePayers[shareId]
+          const shareEntry = shares.find((s) => s.shareId === shareId)
+          const payer = shareEntry?.payer
           const payerProfile = payer ? profiles[payer.toLowerCase()] : undefined
           const assignedName = shareNames[shareId]
           const shortAddress = payer ? `${payer.slice(0, 6)}…${payer.slice(-4)}` : undefined
@@ -840,8 +742,8 @@ function ReceiptCard({
           return {
             name,
             avatarUrl: payerProfile?.avatarUrl,
-            paid: !!shareProgress[shareId]?.paid,
-            amount: shareProgress[shareId]?.amount,
+            paid: !!shareEntry?.paid,
+            amount: shareEntry ? BigInt(shareEntry.amount) : undefined,
           }
         })
       : [
@@ -1046,17 +948,13 @@ function ProgressPanel({
   )
 }
 
-// Đọc TẤT CẢ share bằng 1 lần multicall (Multicall3 có thật trên Arc Testnet,
-// đã verify qua eth_getCode) thay vì mỗi ShareRow tự gọi getShare riêng —
-// trước đây N share = N round-trip RPC nối tiếp, vừa chậm vừa khiến receipt
-// bên trái "chớp" sai trạng thái CHƯA TRẢ lúc đầu vì các share load lệch nhịp nhau.
+// Nhận sẵn `shares` (đã ghép Firestore + optimistic overlay từ component cha)
+// thay vì tự multicall getShare — chỉ còn phần HIỂN THỊ cần phân trang.
 function AssignedShares({
   billId,
   totalAmount,
-  shareCount,
+  shares,
   shareNames,
-  sharePayers,
-  sharePaidTxHashes,
   profiles,
   connectedAddress,
   signerAddress,
@@ -1074,15 +972,12 @@ function AssignedShares({
   paySuccess,
   payError,
   payMethod,
-  onShareLoaded,
   onCrossChainSuccess,
 }: {
   billId: bigint
   totalAmount: bigint
-  shareCount: number
+  shares: BillShareDoc[]
   shareNames: LocalShareNames
-  sharePayers: Record<number, `0x${string}`>
-  sharePaidTxHashes: Record<number, `0x${string}`>
   profiles: Record<string, UserFirestoreData>
   connectedAddress: `0x${string}` | undefined
   // Địa chỉ ví đang thực sự trả (wagmi HOẶC ví Circle) — dùng để hiện đúng số dư
@@ -1102,47 +997,10 @@ function AssignedShares({
   paySuccess: boolean
   payError: Error | null
   payMethod: PayMethod
-  onShareLoaded: (shareId: number, paid: boolean, amount: bigint) => void
-  onCrossChainSuccess: () => void
+  onCrossChainSuccess: (shareId: number, txHash: `0x${string}`) => void
 }) {
   const { t } = useTranslation('common')
-  const shareIds = Array.from({ length: shareCount }, (_, i) => i)
-
-  // Multicall đọc TẤT CẢ share (cần đủ dữ liệu cho "Tiến độ thu tiền" tổng ở
-  // component cha) — chỉ phần HIỂN THỊ mới phân trang, không phải phần đọc chain.
-  const { data: sharesData, refetch: refetchAllShares } = useReadContracts({
-    contracts: shareIds.map((shareId) => ({
-      address: SABI_BILL_ADDRESS,
-      abi: SABI_BILL_ABI,
-      functionName: 'getShare',
-      chainId: arcTestnet.id,
-      args: [billId, BigInt(shareId)] as const,
-    })),
-    query: {
-      enabled: shareCount > 0,
-      refetchOnWindowFocus: false,
-      staleTime: 30_000,
-      ...rpcRetryQueryOptions,
-    },
-  })
-
-  // allowFailure:true (mặc định) khiến 1 phần tử lỗi trong multicall không làm
-  // query báo lỗi tổng thể — rpcRetryQueryOptions ở trên không kích hoạt được
-  // cho trường hợp này, phải tự phát hiện + refetch riêng.
-  useRetryOnPartialFailure(sharesData, refetchAllShares)
-
-  // Mỗi lần retry ở trên thành công thêm 1 share, danh sách render dần dần
-  // (2 → 3 → 4 người), nhìn giật/không đồng bộ. Đợi cho TỚI KHI đủ toàn bộ
-  // rồi mới hiện 1 lần — có deadline 8s để không treo mãi nếu 1 share nào đó
-  // lỗi thật (không phải rate-limit), lúc đó vẫn hiện phần đã có.
-  const allSharesLoaded = sharesData !== undefined && sharesData.every((r) => r.status === 'success')
-  const [forceShowPartial, setForceShowPartial] = useState(false)
-  useEffect(() => {
-    setForceShowPartial(false)
-    const timer = setTimeout(() => setForceShowPartial(true), 8000)
-    return () => clearTimeout(timer)
-  }, [billId])
-  const readyToRender = allSharesLoaded || forceShowPartial
+  const shareIds = shares.map((s) => s.shareId)
 
   // Phân trang danh sách share — 10 phần/trang, quá 10 chuyển trang, giống
   // hệt danh sách người góp bên OPEN_SLOT (OpenSlotInfo)
@@ -1152,33 +1010,21 @@ function AssignedShares({
   const currentSharePage = Math.min(sharePage, totalSharePages - 1)
   const visibleShareIds = shareIds.slice(currentSharePage * SHARE_PAGE_SIZE, currentSharePage * SHARE_PAGE_SIZE + SHARE_PAGE_SIZE)
 
-  if (!readyToRender) {
-    return (
-      <p style={{ fontSize: 12.5, color: colors.textSecondary, padding: '8px 0' }}>
-        {t('bill.share_list_loading')}
-      </p>
-    )
-  }
-
   return (
     <div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {visibleShareIds.map((shareId) => {
         const isThisRowPaying = payingShareId === shareId
         const savedHash = paidTxHashes[shareId]
-        // sharePaidTxHashes đọc thẳng từ event log SharePaid nên luôn có hash,
-        // kể cả share đã trả từ thiết bị/phiên khác (giống contributions.txHash
-        // bên OPEN_SLOT) — chỉ dùng để HIỆN link hash, KHÔNG gộp vào displaySuccess
-        // (giữ paidDescription trung lập "Đã xác nhận trên Arc" cho share cũ,
-        // không đoán bừa là "trả trực tiếp phiên này").
-        const displayHash = isThisRowPaying ? payTxHash : savedHash ?? sharePaidTxHashes[shareId]
+        const shareEntry = shares.find((s) => s.shareId === shareId)
+        // txHash Firestore luôn có, kể cả share đã trả từ thiết bị/phiên khác
+        // (giống contributions.txHash bên OPEN_SLOT) — chỉ dùng để HIỆN link
+        // hash, KHÔNG gộp vào displaySuccess (giữ paidDescription trung lập
+        // "Đã xác nhận trên Arc" cho share cũ, không đoán bừa là "trả trực tiếp phiên này").
+        const displayHash = isThisRowPaying ? payTxHash : savedHash ?? (shareEntry?.txHash ?? undefined)
         const displaySuccess = isThisRowPaying ? paySuccess : !!savedHash
-        const shareResult = sharesData?.[shareId]
-        const share =
-          shareResult && shareResult.status === 'success'
-            ? (shareResult.result as unknown as { amount: bigint; paid: boolean })
-            : undefined
-        const payerAddress = sharePayers[shareId]
+        const share = shareEntry ? { amount: BigInt(shareEntry.amount), paid: shareEntry.paid } : undefined
+        const payerAddress = shareEntry?.payer ?? undefined
         const payerProfile = payerAddress ? profiles[payerAddress.toLowerCase()] : undefined
         return (
           <ShareRow
@@ -1187,7 +1033,6 @@ function AssignedShares({
             totalAmount={totalAmount}
             shareId={shareId}
             share={share}
-            refetchShare={refetchAllShares}
             name={shareNames[shareId]}
             signerAddress={signerAddress}
             payerProfile={payerProfile}
@@ -1203,8 +1048,7 @@ function AssignedShares({
             paySuccess={displaySuccess}
             payError={isThisRowPaying ? payError : null}
             payMethod={payMethod}
-            onShareLoaded={onShareLoaded}
-            onCrossChainSuccess={onCrossChainSuccess}
+            onCrossChainSuccess={(txHash) => onCrossChainSuccess(shareId, txHash)}
           />
         )
       })}
@@ -1258,7 +1102,6 @@ function ShareRow({
   totalAmount,
   shareId,
   share,
-  refetchShare,
   name,
   signerAddress,
   payerProfile,
@@ -1274,14 +1117,12 @@ function ShareRow({
   paySuccess,
   payError,
   payMethod,
-  onShareLoaded,
   onCrossChainSuccess,
 }: {
   billId: bigint
   totalAmount: bigint
   shareId: number
   share: { amount: bigint; paid: boolean } | undefined
-  refetchShare: () => void
   name: string | undefined
   signerAddress: `0x${string}` | undefined
   payerProfile: UserFirestoreData | undefined
@@ -1297,8 +1138,7 @@ function ShareRow({
   paySuccess: boolean
   payError: Error | null
   payMethod: PayMethod
-  onShareLoaded: (shareId: number, paid: boolean, amount: bigint) => void
-  onCrossChainSuccess: () => void
+  onCrossChainSuccess: (txHash: `0x${string}`) => void
 }) {
   const { t } = useTranslation('common')
   // Auto-fill tên từ profile name nếu người dùng đã đặt tên hồ sơ
@@ -1345,25 +1185,17 @@ function ShareRow({
     }
   }, [ccState.status, ccState.relayTxHash])
 
+  // Trả cross-chain xong → ghi ngay optimistic ở component cha (payer = ví
+  // đang trả), không cần đợi script sync-firestore chạy lại.
   useEffect(() => {
-    if (paySuccess || ccState.status === 'success') refetchShare()
-  }, [paySuccess, ccState.status])
-
-  // Trả cross-chain xong → kéo lại ví đã trả (SharePaid) ở component cha để hoá
-  // đơn hiện đúng địa chỉ — event có thể index trễ vài giây nên thử lại 1 lần sau 6s,
-  // giống hệt cơ chế đã dùng cho danh sách người góp bên OPEN_SLOT.
-  useEffect(() => {
-    if (ccState.status !== 'success') return
-    onCrossChainSuccess()
-    const retry = setTimeout(onCrossChainSuccess, 6000)
-    return () => clearTimeout(retry)
+    if (ccState.status !== 'success' || !ccState.relayTxHash) return
+    onCrossChainSuccess(ccState.relayTxHash)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ccState.status])
 
-  // Share đã đọc lại từ chain thấy "paid" (qua refetchShare ở effect trên) →
-  // panel "Đang cập nhật danh sách..." hết nhiệm vụ lấp gap, tự đóng thay vì
-  // treo mãi — thiếu bước này nên trước đây panel không bao giờ tự tắt, khác
-  // với OPEN_SLOT (OpenSlotInfo) đã có sẵn cơ chế tương đương.
+  // `share` đã thấy "paid" (qua optimistic overlay ở component cha, effect
+  // trên) → panel "Đang cập nhật danh sách..." hết nhiệm vụ lấp gap, tự đóng
+  // thay vì treo mãi — khớp cơ chế OPEN_SLOT (OpenSlotInfo) đã có sẵn.
   useEffect(() => {
     if (ccState.status === 'success' && share?.paid) {
       resetCrossChainPay()
@@ -1372,13 +1204,6 @@ function ShareRow({
   }, [ccState.status, share?.paid])
 
   const isPaid = share ? share.paid || paySuccess || ccState.status === 'success' : false
-
-  // Báo cáo trạng thái lên component cha để tính "Tiến độ thu tiền" tổng —
-  // không đọc lại chain, chỉ tái dùng dữ liệu ShareRow đã đọc sẵn.
-  useEffect(() => {
-    if (share) onShareLoaded(shareId, isPaid, share.amount)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [share?.amount, isPaid])
 
   if (!share) return null
 
@@ -1663,7 +1488,7 @@ function OpenSlotInfo({
   slotNames: Record<string, string>
   profiles: Record<string, UserFirestoreData>
   payMethod: PayMethod
-  onCrossChainSuccess: () => void
+  onCrossChainSuccess: (txHash: `0x${string}`) => void
 }) {
   const { t } = useTranslation('common')
   const amount = formatUnits(amountPerSlot, 6)
@@ -1710,13 +1535,11 @@ function OpenSlotInfo({
     }
   }, [ccState.status, ccState.relayTxHash])
 
-  // Relay xong → kéo lại bill + danh sách góp (trước đây chỉ refetch khi trả trực tiếp,
-  // trả cross-chain phải F5 mới thấy dòng mới). Refetch lại 1 lần sau 6s phòng RPC index trễ.
+  // Relay xong → ghi ngay optimistic ở component cha, không cần đợi script
+  // sync-firestore chạy lại mới thấy dòng góp tiền mới.
   useEffect(() => {
-    if (ccState.status !== 'success') return
-    onCrossChainSuccess()
-    const retry = setTimeout(onCrossChainSuccess, 6000)
-    return () => clearTimeout(retry)
+    if (ccState.status !== 'success' || !ccState.relayTxHash) return
+    onCrossChainSuccess(ccState.relayTxHash)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ccState.status])
 
