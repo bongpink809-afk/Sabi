@@ -9,7 +9,7 @@ import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
 import { formatUnits } from 'viem'
 import { sepolia } from 'wagmi/chains'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
-import { scanEventLogs } from '../../lib/eventScan'
+import { scanEventLogs, withRetry429 } from '../../lib/eventScan'
 import { rpcRetryQueryOptions } from '../../lib/rpcRetry'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
 import { PaymentChainModal } from '../../components/PaymentChainModal'
@@ -128,21 +128,22 @@ const BillDetail: NextPage = () => {
     if (billId === undefined || !publicClient) return
     setIsLoadingContributions(true)
     try {
-      const latestBlock = await publicClient.getBlockNumber()
-      const allLogs = await scanEventLogs(
-        publicClient,
-        'SlotFilled',
-        { billId },
-        latestBlock,
-        `sabi-scan-SlotFilled-bill-${billId.toString()}`
-      )
+      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
+      // Cache key CHUNG cho mọi bill (giống hệt useProfileData.ts) thay vì riêng
+      // theo billId — billId có indexed nên lọc server-side được, nhưng cái giá
+      // là mất khả năng chia sẻ cache: mỗi bill khác nhau phải tự quét lại catch-up
+      // từ đầu dù cùng block range vừa quét xong cho bill khác. Quét không lọc rồi
+      // tự lọc billId ở client rẻ hơn nhiều (tổng số log toàn app còn nhỏ).
+      const allLogs = await scanEventLogs(publicClient, 'SlotFilled', undefined, latestBlock, 'sabi-scan-SlotFilled')
 
-      const list: Contribution[] = allLogs.map((log: any) => ({
-        payer: log.args.payer,
-        amount: log.args.amount,
-        matched: log.args.matched,
-        txHash: log.transactionHash,
-      }))
+      const list: Contribution[] = allLogs
+        .filter((log: any) => log.args.billId === billId)
+        .map((log: any) => ({
+          payer: log.args.payer,
+          amount: log.args.amount,
+          matched: log.args.matched,
+          txHash: log.transactionHash,
+        }))
       setContributions(list)
     } catch (err) {
       console.error('Lỗi đọc lịch sử góp tiền:', err)
@@ -163,21 +164,18 @@ const BillDetail: NextPage = () => {
   const fetchSharePayers = async () => {
     if (billId === undefined || !publicClient) return
     try {
-      const latestBlock = await publicClient.getBlockNumber()
-      const allLogs = await scanEventLogs(
-        publicClient,
-        'SharePaid',
-        { billId },
-        latestBlock,
-        `sabi-scan-SharePaid-bill-${billId.toString()}`
-      )
+      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
+      // Cache key chung — xem giải thích ở fetchContributions phía trên.
+      const allLogs = await scanEventLogs(publicClient, 'SharePaid', undefined, latestBlock, 'sabi-scan-SharePaid')
       const payerMap: Record<number, `0x${string}`> = {}
       const hashMap: Record<number, `0x${string}`> = {}
-      allLogs.forEach((log: any) => {
-        const shareId = Number(log.args.shareId)
-        payerMap[shareId] = log.args.payer
-        hashMap[shareId] = log.transactionHash
-      })
+      allLogs
+        .filter((log: any) => log.args.billId === billId)
+        .forEach((log: any) => {
+          const shareId = Number(log.args.shareId)
+          payerMap[shareId] = log.args.payer
+          hashMap[shareId] = log.transactionHash
+        })
       setSharePayers(payerMap)
       setSharePaidTxHashes(hashMap)
     } catch (err) {
@@ -601,7 +599,7 @@ const BillDetail: NextPage = () => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 8,
-                background: `linear-gradient(135deg, ${colors.primary}, ${colors.primaryHover})`,
+                background: colors.buttonPrimary,
                 color: '#fff',
                 border: 'none',
                 borderRadius: radius.button,
@@ -658,6 +656,7 @@ const BillDetail: NextPage = () => {
               {mode === 'ASSIGNED' && !!effectiveAddress && (
               <AssignedShares
                 billId={billId}
+                totalAmount={bill.totalAmount}
                 shareCount={Number(shareCount ?? 0)}
                 shareNames={shareNames}
                 sharePayers={sharePayers}
@@ -1030,6 +1029,7 @@ function ProgressPanel({
 // bên trái "chớp" sai trạng thái CHƯA TRẢ lúc đầu vì các share load lệch nhịp nhau.
 function AssignedShares({
   billId,
+  totalAmount,
   shareCount,
   shareNames,
   sharePayers,
@@ -1055,6 +1055,7 @@ function AssignedShares({
   onCrossChainSuccess,
 }: {
   billId: bigint
+  totalAmount: bigint
   shareCount: number
   shareNames: LocalShareNames
   sharePayers: Record<number, `0x${string}`>
@@ -1160,6 +1161,7 @@ function AssignedShares({
           <ShareRow
             key={shareId}
             billId={billId}
+            totalAmount={totalAmount}
             shareId={shareId}
             share={share}
             refetchShare={refetchAllShares}
@@ -1230,6 +1232,7 @@ function AssignedShares({
 
 function ShareRow({
   billId,
+  totalAmount,
   shareId,
   share,
   refetchShare,
@@ -1252,6 +1255,7 @@ function ShareRow({
   onCrossChainSuccess,
 }: {
   billId: bigint
+  totalAmount: bigint
   shareId: number
   share: { amount: bigint; paid: boolean } | undefined
   refetchShare: () => void
@@ -1357,7 +1361,12 @@ function ShareRow({
 
   const isCrossChainBusy = !['idle', 'success', 'error'].includes(ccState.status)
   const amount = formatUnits(share.amount, 6)
-  const needsApprove = isWalletConnected && !hasAllowance(share.amount)
+  // So allowance theo TỔNG bill (không phải riêng amount của share này) — cùng
+  // 1 mức allowance áp dụng cho mọi share trong bill, để mọi hàng cùng hiện
+  // "Pay" hoặc cùng hiện "Approve" tại 1 thời điểm, không lẫn lộn theo số tiền
+  // từng share (vd share 1 USDC "Pay" trong khi share 10 USDC "Approve" dù
+  // cùng 1 allowance thật).
+  const needsApprove = isWalletConnected && !hasAllowance(totalAmount)
 
   const saveName = () => {
     if (!nameDraft.trim()) return
@@ -1524,7 +1533,7 @@ function ShareRow({
           </div>
         ) : needsApprove ? (
           <button
-            onClick={() => onApprove(share?.amount)}
+            onClick={() => onApprove(totalAmount)}
             disabled={isApproving}
             style={{
               fontSize: 13,

@@ -2,7 +2,31 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (session tăng độ ổn định `/profile`: retry getBlockNumber + gộp getTransaction vào rate-limiter chung)
+## Cập nhật mới nhất (đồng bộ màu nút toàn app, fix Approve/Pay lẫn lộn, bill detail load chậm)
+
+**1. Đồng bộ màu nút:** `theme.ts` — `colors.buttonPrimary` đổi từ đen (`#17151F`) sang tím (`#998EFF`, đúng CTA landing), `buttonPrimaryHover` sang `#877DE0`. Token trung tâm nên cascade tự động khắp app. Nút "Share bill" (`bill/[id].tsx`) đổi từ gradient riêng (`colors.primary`/`primaryHover`) sang dùng thẳng `colors.buttonPrimary` (phẳng, khớp mọi nút khác).
+
+**2. Fix "Approve USDC"/"Pay" hiện lẫn lộn trong 1 bill:** root cause — mỗi `ShareRow` so `allowance` (1 giá trị DUY NHẤT/ví theo chuẩn ERC20) với `share.amount` RIÊNG của hàng đó, nên share nhỏ hiện "Pay" trong khi share lớn hơn cùng lúc hiện "Approve" dù cùng 1 allowance thật. Fix: đổi threshold so sánh + amount approve sang `bill.totalAmount` (thread qua prop `totalAmount` từ `AssignedShares` → `ShareRow`) — approve 1 lần đủ cho cả bill, mọi hàng luôn đồng nhất trạng thái. Chỉ sửa mode ASSIGNED, không đụng OPEN_SLOT (vốn đã dùng chung 1 `amountPerSlot`, không có bug tương tự).
+
+**3. Bill detail load chậm — root cause khác `/profile`:** `fetchContributions`/`fetchSharePayers` dùng cache key RIÊNG theo từng `billId` (lọc server-side được vì `billId` indexed) — hệ quả mỗi bill khác nhau phải tự quét catch-up lại từ đầu, không chia sẻ cache dù cùng block range. Gap catch-up đo được lúc điều tra: 38.952 block (sát ngưỡng `MAX_CHUNKS=4`). Fix: đổi sang cache key CHUNG (`sabi-scan-SlotFilled`/`sabi-scan-SharePaid`, khớp `profile.tsx`), quét không lọc rồi filter `billId` ở client; bọc `getBlockNumber()` bằng `withRetry429`; regenerate seed (`cutoffBlock` 55.089.050 → 55.129.557). Verify thật: bill #1 nguội cần 4 chunk/7.5s, bill #2 sau đó chỉ cần 1 chunk/319ms (dùng lại cache bill #1) — xác nhận cơ chế share cache đúng thiết kế.
+
+Phát hiện bill detail "stuck ở Loading" lúc test mục 2 → dùng `git stash` xác nhận KHÔNG phải regression (bản gốc cũng bị y hệt) → khởi đầu điều tra RPC throttling ở mục dưới.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (RPC throttling Arc Testnet — kiến thức tích luỹ, tiếp nối session /profile cùng ngày)
+
+Sau fix `/profile`, chủ dự án báo cả `/profile` lẫn bill detail đều load chậm bất thường (~20s, đôi khi treo hẳn). Điều tra bằng DevTools Network/Console + đọc source thật, rút ra:
+
+1. **Batch JSON-RPC phản tác dụng trên `rpc.testnet.arc.network`, đã test và LOẠI BỎ:** 6 lệnh rời rạc → 0 lỗi. Bật `batch: true` → RPC trả `"request limit reached"` cho 3/6 lệnh. `batch: { wait: 20 }` → 6/6 lỗi. RPC này đếm giới hạn theo số lệnh logic trong batch, chặt hơn hẳn gửi rời rạc — **không dùng `batch` cho transport Arc**.
+2. **429 không kèm CORS header → browser hiện nhầm thành "CORS error"** — thấy lỗi CORS hàng loạt trên RPC này thì mặc định hiểu là rate-limit, không phải lỗi cấu hình CORS thật.
+3. **`RateLimiter(maxConcurrent, minIntervalMs)` trong `concurrency.ts` đã là rate-limit theo thời gian thực sự** (không phải thuần concurrency) — `minIntervalMs` ép khoảng cách giữa các lần dispatch. Đang set `RateLimiter(2, 400)` ≈ trần 2.5 req/giây. Không đổi sang token bucket trừ khi mục tiêu là đổi shape traffic (cho burst) — token bucket lỏng hơn, dễ làm tệ hơn nếu mục tiêu là giảm rate.
+4. **RPC public có thể giữ trạng thái rate-limit riêng theo IP, tích luỹ sau nhiều giờ test dồn dập.** Benchmark trên IP đã heavy-test cả ngày KHÔNG đáng tin để đánh giá 1 fix — dễ nhầm "code vẫn lỗi" trong khi là do IP bị RPC-side throttle từ lịch sử test cũ. Cần verify bằng mạng/IP sạch (ngrok + 4G, VPN, hoặc đợi rate-limit hạ nhiệt) trước khi kết luận.
+5. **Fix đã áp dụng:** custom `fetchFn` cho transport Arc trong `wagmi.ts`, route qua `withGlobalConcurrency` sẵn có — bắt được mọi request vật lý (kể cả `useReadContract`/`useReadContracts` của wagmi, không chỉ `eventScan.ts` như trước). Bỏ lớp `withGlobalConcurrency` dư thừa ở `eventScan.ts`/`profile.tsx` (double-throttle cũ). Đã confirm `fetchFn` thật sự được gọi (11 lần/5s khi mở 1 bill). **CHƯA verify hiệu quả bằng mạng sạch** — test cuối trên IP đã nhiễm vẫn thấy 429/CORS, nghi do điểm #4, không kết luận code sai.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (session tăng độ ổn định `/profile`: retry getBlockNumber + gộp getTransaction vào rate-limiter chung)
 
 **Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa 3 file `frontend-rk/`, không chạy lại test Solidity/Foundry.
 

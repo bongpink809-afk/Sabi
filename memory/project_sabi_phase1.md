@@ -350,3 +350,70 @@ Handoff mới (`sabi-landing-v2-demo.html` + note trong chat, không phải file
 - **KHÔNG thử lại batching JSON-RPC cho RPC Arc Testnet này** — đã test thực nghiệm và xác nhận phản tác dụng (xem mục 4 phía trên).
 
 **How to apply:** Nếu sau này thêm 1 lệnh RPC đơn lẻ mới (không qua `scanEventLogs`/`useReadContracts`) ở bất kỳ trang nào, luôn bọc bằng `withRetry429` (export từ `eventScan.ts`) tối thiểu — đây là lớp phòng thủ thứ 2 rẻ, không tốn gì khi RPC khoẻ, chỉ có tác dụng khi RPC blip. Nếu lệnh đó có thể lặp lại N lần trong 1 trang (list dài), bọc thêm `withGlobalConcurrency` (từ `concurrency.ts`) để không bắn song song không kiểm soát.
+
+---
+
+## Cập nhật (session sau — đồng bộ màu nút toàn app sang tím, fix Approve/Pay hiện lẫn lộn)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `theme.ts` + `bill/[id].tsx`.
+
+**1. Đồng bộ màu nút — chủ dự án gửi ảnh nút "Create a bill" (tím `#998EFF`), yêu cầu thay mọi nút đen trong app sang màu này, gồm cả nút Share bill ở bill detail:**
+- `theme.ts`: đổi `colors.buttonPrimary` từ `#17151F` (đen) sang `#998EFF` (tím, đúng màu CTA landing), `colors.buttonPrimaryHover` từ `#2B2838` sang `#877DE0`. Đây là token TRUNG TÂM cho mọi nút hành động chính (Tạo bill, Approve, Trả tiền, các modal thanh toán...) — đổi 1 chỗ, cascade tự động khắp app, không cần sửa từng nơi.
+- Nút "Share bill" (`bill/[id].tsx`) trước đó dùng gradient RIÊNG (`colors.primary` → `colors.primaryHover`, tông tím đậm/indigo khác hẳn phần còn lại của app) — đổi sang dùng thẳng `colors.buttonPrimary` (phẳng, không gradient), khớp y hệt mọi nút khác.
+- Verify: Playwright screenshot xác nhận nút "Connect wallet to create bill" (`/create`) và "Share bill" (`/bill/1`) đều ra đúng `#998EFF`.
+
+**2. Fix bug "Approve USDC"/"Pay" hiện lẫn lộn trong danh sách share cùng 1 bill — chủ dự án gửi ảnh 4 share (Chi=1, Zu=5, Tim=10, Mod=1 USDC): Chi/Zu/Mod hiện "Pay", riêng Tim hiện "Approve USDC":**
+- **Root cause xác nhận qua code** (không phải bug hiển thị lệch đồng bộ, là thiết kế cũ gây hiểu lầm): mỗi `ShareRow` so `allowance` (1 giá trị DUY NHẤT theo chuẩn ERC20 cho cả ví, không phải theo từng share) với `share.amount` RIÊNG của chính hàng đó (`hasEnoughAllowance(share.amount)`) — code cũ cố tình approve ĐÚNG số tiền từng giao dịch (không dùng `maxUint256`, an toàn hơn) nhưng cái giá là: nếu allowance hiện tại (vd còn sót 5 USDC từ lần approve trước) đủ cho vài share nhỏ nhưng KHÔNG đủ cho share lớn hơn (Tim=10), UI hiện lẫn Pay/Approve dù cùng 1 allowance thật — đúng như ảnh chủ dự án gửi.
+- Chủ dự án xác nhận muốn: tại 1 thời điểm phải đồng nhất (tất cả cùng Pay HOẶC tất cả cùng Approve), không lẫn lộn.
+- **Fix:** thread prop `totalAmount` (= `bill.totalAmount`) xuyên suốt `AssignedShares` → `ShareRow`, đổi `needsApprove = !hasAllowance(share.amount)` → `!hasAllowance(totalAmount)`, đổi nút Approve từ `onApprove(share?.amount)` → `onApprove(totalAmount)`. Giờ approve 1 lần là đủ cho TOÀN BỘ bill (không phải riêng share đang bấm), mọi hàng dùng chung 1 threshold nên luôn đồng nhất trạng thái Pay/Approve tại mọi thời điểm.
+- Chỉ sửa mode ASSIGNED (`AssignedShares`/`ShareRow`) — mode OPEN_SLOT (`OpenSlotInfo`) không đụng, vì các slot vốn đã dùng chung 1 `amountPerSlot` giống nhau, không có bug tương tự.
+- Verify: typecheck sạch. Lúc test bằng Playwright phát hiện bill detail bị "stuck ở Loading bill info..." — đã dùng `git stash` để loại trừ, xác nhận hiện tượng này XẢY RA Y HỆT trên bản gốc CHƯA sửa (không phải regression của fix này) — chính phát hiện này là khởi đầu cho việc điều tra RPC throttling ở mục dưới.
+
+---
+
+## Cập nhật (session sau — bill detail load chậm: cache dùng chung theo bill + regenerate seed)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `bill/[id].tsx` + regenerate `onchain-history-seed.json`.
+
+Chủ dự án báo "chi tiết bill load info thật sự lâu quá", yêu cầu điều tra.
+
+**Root cause xác nhận (đọc code + đo RPC thật, không suy đoán):** `fetchContributions`/`fetchSharePayers` trong `bill/[id].tsx` dùng cache key RIÊNG theo từng `billId` (`sabi-scan-SlotFilled-bill-${billId}`, `sabi-scan-SharePaid-bill-${billId}`) và lọc server-side theo `billId` (event `SlotFilled`/`SharePaid` có `billId` indexed nên lọc được) — khác hẳn `profile.tsx` (dùng cache key CHUNG `sabi-scan-SlotFilled`/`sabi-scan-SharePaid` cho mọi ví, vì `payer` không indexed nên vốn phải quét hết rồi lọc client). Hệ quả: mỗi bill khác nhau mở lên phải tự quét lại catch-up TỪ ĐẦU (từ cutoff của seed tới block mới nhất) dù CÙNG block range đó vừa quét xong cho bill khác — không chia sẻ được gì cả. Đo trực tiếp lúc điều tra: gap catch-up đã lên **38.952 block** — sát ngưỡng cần đủ 4 chunk (`MAX_CHUNKS=4`, `CHUNK_SIZE=10000`), dễ dính 429 dồn dập mỗi lần mở bill mới.
+
+**Fix:**
+- Đổi `fetchContributions`/`fetchSharePayers` sang dùng cache key CHUNG (`sabi-scan-SlotFilled`, `sabi-scan-SharePaid`, khớp đúng `profile.tsx`), quét KHÔNG lọc theo billId ở RPC (`args: undefined`) rồi tự `.filter((log) => log.args.billId === billId)` ở client — chi phí rẻ vì tổng số log toàn app còn nhỏ.
+- Bọc `getBlockNumber()` bằng `withRetry429` trong cả 2 hàm (cùng lỗ hổng đã vá ở `useProfileData.ts` trước đó, giờ vá luôn ở đây).
+- Chạy lại `node scripts/build-history-seed.mjs` — đẩy `cutoffBlock` từ 55.089.050 lên 55.129.557, gap catch-up về gần 0.
+
+**Verify thật (Playwright, đo bằng console `[profile-perf]`):**
+- Mở bill #1 (nguội, chưa có cache): cần 4 chunk, dính vài lỗi 429, quét mất 7.5s.
+- Mở bill #2 ngay sau đó: chỉ cần **1 chunk, 319ms** — dùng lại ĐÚNG cache bill #1 vừa quét (cursor tiếp tục từ 55.129.050 thay vì quét lại từ seed floor) — xác nhận cơ chế chia sẻ cache hoạt động đúng như thiết kế.
+- Sau khi regenerate seed, mở bill mới (chưa từng cache) chỉ cần 1 chunk (~320ms) thay vì 4 — do gap catch-up đã về gần 0.
+
+**Việc còn pending:** seed sẽ lại lùi dần theo thời gian (không bắt buộc re-run định kỳ, catch-up runtime tự lo phần sau, nhưng nên chạy lại trước các mốc quan trọng — giống ghi chú các session trước).
+
+**How to apply:** Nếu sau này thêm 1 trang mới cũng cần đọc `SharePaid`/`SlotFilled` (hoặc bất kỳ event có filter theo 1 giá trị cụ thể như `billId`), CÂN NHẮC dùng cache key CHUNG + filter client-side thay vì cache key riêng + filter server-side — trừ khi số lượng log thực sự lớn (hàng nghìn+) khiến filter client-side tốn kém, lúc đó filter server-side mới đáng giá hơn việc mất khả năng chia sẻ cache.
+
+---
+
+## RPC throttling trên Arc Testnet — kiến thức tích luỹ từ session debug cùng ngày (tiếp nối session "tăng độ ổn định /profile" phía trên)
+
+Sau khi fix `/profile`, chủ dự án báo cả `/profile` lẫn bill detail đều load chậm bất thường (~20s, đôi khi treo hẳn). Điều tra sâu hơn bằng DevTools Network/Console + đọc source thật (không suy đoán), rút ra 5 điểm sau — áp dụng cho MỌI thay đổi liên quan RPC Arc Testnet sau này:
+
+1. **Batch JSON-RPC phản tác dụng trên `rpc.testnet.arc.network` — đã test thực nghiệm, ĐỪNG dùng:** 6 lệnh RPC gửi rời rạc (không batch) → 6 request riêng, 0 lỗi. Bật `batch: true` (viem `http()` transport) → RPC trả `"request limit reached"` cho 3/6 lệnh trong batch. Bật `batch: { wait: 20 }` → 6/6 lệnh lỗi hết. Kết luận: RPC này đếm giới hạn theo **số lệnh logic bên trong 1 batch**, chặt hơn hẳn so với cùng số lệnh gửi rời rạc. **Không dùng `batch` cho transport Arc trong `wagmi.ts`** — đã thử và bỏ, không thử lại nếu không có bằng chứng RPC đổi chính sách.
+
+2. **429 từ RPC này không kèm CORS header → browser hiển thị nhầm thành "CORS error":** khi debug thấy hàng loạt lỗi `Access to fetch ... blocked by CORS policy` trên `rpc.testnet.arc.network`, mặc định hiểu đây là **rate-limit (429)**, KHÔNG phải lỗi cấu hình CORS thật — đây là quan sát đã lặp lại nhiều lần xuyên suốt các session trước (xem các update cũ về bug "profile không hiện bill", "Failed to fetch").
+
+3. **`RateLimiter(maxConcurrent, minIntervalMs)` trong `concurrency.ts` ĐÃ LÀ rate-limit theo thời gian thực sự, không phải thuần concurrency limiting** — `minIntervalMs` ép khoảng cách tối thiểu giữa các lần **dispatch** (lúc bắt đầu gọi), không phải giữa các lần hoàn thành. Hiện đang set `RateLimiter(2, 400)` (`maxConcurrent=2`, `minIntervalMs=400`) → trần ~2.5 request/giây khi RPC phản hồi nhanh, hoặc bị `maxConcurrent` ghì lại nếu RPC phản hồi chậm (tự chọn constraint chặt hơn giữa 2 cơ chế). **Không đổi sang token bucket** trừ khi mục tiêu là đổi SHAPE traffic (đều đặn hơn, cho phép burst) — token bucket vốn lỏng hơn thiết kế hiện tại (cho burst tới capacity rồi mới throttle), dễ làm TỆ HƠN nếu mục tiêu là giảm tổng rate, không phải đổi shape.
+
+4. **RPC public có thể giữ trạng thái rate-limit riêng theo IP, tích luỹ sau nhiều giờ test dồn dập trong ngày.** Benchmark đo trên 1 IP đã bị heavy-test (như máy dev đã chạy hàng chục script/Playwright test liên tục nhiều giờ trong ngày) **không đáng tin** để kết luận 1 fix có hiệu quả hay không — dễ nhầm "code vẫn lỗi" trong khi thực ra là RPC-side đang throttle riêng IP đó từ lịch sử test trước, không liên quan gì tới code mới. **Cần verify fix liên quan RPC bằng mạng/IP SẠCH** trước khi kết luận — ví dụ: `ngrok http 3000` + điện thoại tắt Wi-Fi dùng 4G, hoặc bật VPN trên máy dev, hoặc đơn giản là đợi 1 khoảng thời gian dài (nhiều giờ) cho RPC-side rate-limit hạ nhiệt rồi test lại.
+
+5. **Fix đã áp dụng (session này):** custom `fetchFn` cho transport Arc Testnet trong `wagmi.ts`, route qua `withGlobalConcurrency` sẵn có trong `concurrency.ts` — bắt được **mọi** request vật lý tới RPC Arc, kể cả từ `useReadContract`/`useReadContracts` của wagmi (`getBill`, `shareCount`, `getShare` multicall, `allowance`...) chứ không chỉ từ `eventScan.ts` như trước. Đồng thời bỏ lớp `withGlobalConcurrency` bọc thủ công dư thừa ở `eventScan.ts` (dòng gọi `getContractEvents`) và `profile.tsx` (`PaymentRow`'s `getTransaction`) — 2 chỗ này trước đó tự bọc riêng, giờ dư thừa vì transport-level fetchFn đã bắt lại từ đầu, giữ cả 2 lớp sẽ khiến 1 lệnh logic chiếm 2 slot của cùng 1 `RateLimiter` (double-throttle, chậm gấp đôi không cần thiết mà không tăng an toàn gì thêm).
+   - Code: `wagmi.ts` — `const arcThrottledFetch: typeof fetch = (input, init) => withGlobalConcurrency(() => fetch(input, init))`, truyền vào `http(undefined, { fetchFn: arcThrottledFetch })` CHỈ cho transport `[arcTestnet.id]` (không áp dụng cho Base/Arbitrum/Ethereum Sepolia — RPC khác, giới hạn khác, không có bằng chứng cần throttle).
+   - Verify: đã confirm `arcThrottledFetch` THẬT SỰ được wagmi gọi (đo bằng console.log tạm thời, đã dọn sau khi xác nhận — 11 lần fetch trong 5 giây khi mở 1 bill).
+   - **CHƯA verify hiệu quả cuối cùng bằng network sạch** (xem điểm #4) — lần test cuối bằng Playwright trên máy dev (IP đã heavy-test cả ngày) vẫn thấy 429/CORS + load ~23s, nhưng nghi do IP bị nhiễu, KHÔNG kết luận code sai. Cần user tự test lại bằng mạng/thiết bị sạch trước khi coi đây là đã fix xong.
+
+**Việc còn pending liên quan RPC throttling:**
+- Verify fix `fetchFn` bằng mạng sạch (xem điểm #4) — chưa có bằng chứng đáng tin cậy fix có thật sự giảm lỗi 429/CORS trong điều kiện bình thường hay không.
+- Nếu sau khi verify sạch vẫn còn lỗi nhiều, cân nhắc thử tăng `minIntervalMs` (hiện 400ms) — nhưng PHẢI đo bằng mạng sạch trước, không đoán.
+
+**How to apply:** Trước khi đổi bất kỳ giá trị nào trong `concurrency.ts` (`maxConcurrent`, `minIntervalMs`) hoặc thử lại batch JSON-RPC, đọc lại 4 điểm trên — đặc biệt điểm #1 (batch đã test và loại bỏ) và điểm #4 (benchmark trên IP nhiễm test cũ không đáng tin).

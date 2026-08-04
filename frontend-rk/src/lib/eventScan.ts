@@ -1,7 +1,6 @@
 import { usePublicClient } from 'wagmi'
 import { HttpRequestError } from 'viem'
 import { SABI_BILL_ADDRESS, SABI_BILL_ABI, SABI_BILL_DEPLOY_BLOCK } from './contracts'
-import { withGlobalConcurrency } from './concurrency'
 import { loadCachedLogs, saveCachedLogs, CachedRawLog, BIGINT_ARG_KEYS, deserializeArg } from './logCache'
 
 // Dùng chung cho cả useProfileData.ts (Hồ sơ) lẫn bill/[id].tsx (chi tiết bill) —
@@ -152,17 +151,19 @@ export async function scanEventLogs(
   console.time(`[profile-perf] ${cacheKey} chunks`)
   const chunkResults = await Promise.all(
     ranges.map(({ fromBlock, toBlock }) =>
-      withGlobalConcurrency(() =>
-        withRetry429(() =>
-          publicClient.getContractEvents({
-            address: SABI_BILL_ADDRESS,
-            abi: SABI_BILL_ABI,
-            eventName,
-            args,
-            fromBlock,
-            toBlock,
-          })
-        )
+      // Throttle giờ nằm ở tầng transport (wagmi.ts, arcThrottledFetch) — bọc
+      // withGlobalConcurrency thêm ở đây sẽ chiếm 2 slot/lệnh (1 slot ngoài này +
+      // 1 slot khi fetch thật sự bắn ở tầng transport), làm chậm gấp đôi không
+      // cần thiết mà không tăng an toàn gì thêm.
+      withRetry429(() =>
+        publicClient.getContractEvents({
+          address: SABI_BILL_ADDRESS,
+          abi: SABI_BILL_ABI,
+          eventName,
+          args,
+          fromBlock,
+          toBlock,
+        })
       )
     )
   )

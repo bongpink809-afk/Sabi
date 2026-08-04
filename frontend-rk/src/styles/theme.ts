@@ -8,10 +8,11 @@ export const colors = {
   primary: '#7C6AEF',
   primaryHover: '#6952E0',
 
-  // Nền nút hành động chính (Tạo bill, Approve, Trả tiền...) — than đen theo thiết kế,
-  // tách riêng khỏi `primary` vì trước đây dùng chung 1 token cho cả nút lẫn accent/link.
-  buttonPrimary: '#17151F',
-  buttonPrimaryHover: '#2B2838',
+  // Nền nút hành động chính (Tạo bill, Approve, Trả tiền, Share bill...) — đồng bộ
+  // theo màu tím CTA của landing page (#998EFF), tách riêng khỏi `primary` vì trước
+  // đây dùng chung 1 token cho cả nút lẫn accent/link.
+  buttonPrimary: '#998EFF',
+  buttonPrimaryHover: '#877DE0',
 
   // Nền
   surface: '#FFFFFF',          // nền card/box
