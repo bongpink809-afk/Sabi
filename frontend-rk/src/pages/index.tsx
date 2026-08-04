@@ -95,8 +95,12 @@ const Landing: FC = () => {
             <a className="nav-link" href="https://faucet.circle.com/" target="_blank" rel="noopener noreferrer">
               {t('landing.nav_faucet')}
             </a>
-            {/* TODO: thay href="#" bằng link Google Form/Typeform thật sau khi Shizu tạo form (xem HANDOFF mục 3) */}
-            <a className="nav-link" href="#">
+            <a
+              className="nav-link"
+              href="https://docs.google.com/forms/d/e/1FAIpQLScWuvJDelu5jk0gU4T0pUsjUt9WXheXT4lUyzlReikUkX8t4Q/viewform?usp=publish-editor"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               {t('landing.nav_feedback')}
             </a>
             <LocaleSwitcher />
