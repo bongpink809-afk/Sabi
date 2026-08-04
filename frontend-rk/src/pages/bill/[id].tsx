@@ -129,21 +129,18 @@ const BillDetail: NextPage = () => {
     setIsLoadingContributions(true)
     try {
       const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
-      // Cache key CHUNG cho mọi bill (giống hệt useProfileData.ts) thay vì riêng
-      // theo billId — billId có indexed nên lọc server-side được, nhưng cái giá
-      // là mất khả năng chia sẻ cache: mỗi bill khác nhau phải tự quét lại catch-up
-      // từ đầu dù cùng block range vừa quét xong cho bill khác. Quét không lọc rồi
-      // tự lọc billId ở client rẻ hơn nhiều (tổng số log toàn app còn nhỏ).
-      const allLogs = await scanEventLogs(publicClient, 'SlotFilled', undefined, latestBlock, 'sabi-scan-SlotFilled')
+      // Cache key RIÊNG theo billId — filter server-side qua args ở getContractEvents
+      // (billId có indexed) để mỗi response chỉ chứa log của đúng bill đang xem, giảm
+      // rủi ro trước demo (deadline gần). Đánh đổi: mất khả năng chia sẻ cache giữa
+      // các bill khác nhau — chấp nhận được, xem memory để biết quyết định đầy đủ.
+      const allLogs = await scanEventLogs(publicClient, 'SlotFilled', { billId }, latestBlock, `sabi-scan-SlotFilled-${billId}`)
 
-      const list: Contribution[] = allLogs
-        .filter((log: any) => log.args.billId === billId)
-        .map((log: any) => ({
-          payer: log.args.payer,
-          amount: log.args.amount,
-          matched: log.args.matched,
-          txHash: log.transactionHash,
-        }))
+      const list: Contribution[] = allLogs.map((log: any) => ({
+        payer: log.args.payer,
+        amount: log.args.amount,
+        matched: log.args.matched,
+        txHash: log.transactionHash,
+      }))
       setContributions(list)
     } catch (err) {
       console.error('Lỗi đọc lịch sử góp tiền:', err)
@@ -165,17 +162,15 @@ const BillDetail: NextPage = () => {
     if (billId === undefined || !publicClient) return
     try {
       const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
-      // Cache key chung — xem giải thích ở fetchContributions phía trên.
-      const allLogs = await scanEventLogs(publicClient, 'SharePaid', undefined, latestBlock, 'sabi-scan-SharePaid')
+      // Cache key riêng theo billId — xem giải thích ở fetchContributions phía trên.
+      const allLogs = await scanEventLogs(publicClient, 'SharePaid', { billId }, latestBlock, `sabi-scan-SharePaid-${billId}`)
       const payerMap: Record<number, `0x${string}`> = {}
       const hashMap: Record<number, `0x${string}`> = {}
-      allLogs
-        .filter((log: any) => log.args.billId === billId)
-        .forEach((log: any) => {
-          const shareId = Number(log.args.shareId)
-          payerMap[shareId] = log.args.payer
-          hashMap[shareId] = log.transactionHash
-        })
+      allLogs.forEach((log: any) => {
+        const shareId = Number(log.args.shareId)
+        payerMap[shareId] = log.args.payer
+        hashMap[shareId] = log.transactionHash
+      })
       setSharePayers(payerMap)
       setSharePaidTxHashes(hashMap)
     } catch (err) {

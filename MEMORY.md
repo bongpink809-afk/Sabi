@@ -2,7 +2,21 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (đồng bộ màu nút toàn app, fix Approve/Pay lẫn lộn, bill detail load chậm)
+## Cập nhật mới nhất (REVERT bill detail về cache riêng-theo-bill, filter server-side)
+
+**QUAN TRỌNG — đảo ngược quyết định của mục ngay phía dưới** ("bill detail load chậm: cache dùng chung theo bill + regenerate seed"): mục đó đổi `bill/[id].tsx` sang cache CHUNG cho mọi bill — mục NÀY revert lại về cache RIÊNG theo `billId` + filter server-side, theo yêu cầu bàn giao trực tiếp từ chủ dự án (ưu tiên an toàn trước deadline demo hackathon). **Trạng thái hiện tại (đọc mục này, không phải mục "cache dùng chung" phía dưới):** `fetchContributions`/`fetchSharePayers` dùng cache key `sabi-scan-SlotFilled-${billId}`/`sabi-scan-SharePaid-${billId}`, truyền `args: { billId }` vào `scanEventLogs` để filter server-side, KHÔNG còn filter client-side.
+
+**Đã phản biện bằng bằng chứng trước khi implement** (không làm mù theo bàn giao): số CHUNK cần quét phụ thuộc block range, KHÔNG phụ thuộc filter (đọc code `eventScan.ts` xác nhận) — nên "filter giảm số chunk" trong lý do bàn giao không đúng, filter chỉ giảm KÍCH THƯỚC mỗi response. Dữ liệu đo trước đó cũng mâu thuẫn với "cache riêng trước đây luôn nhanh" (code cũ vẫn cần 4 chunk khi gap catch-up lớn, test `git stash` xác nhận "stuck loading" xảy ra y hệt trên bản cache riêng). Đã trình bày rõ qua `AskUserQuestion`, đề xuất giữ cache chung + chỉ regenerate seed sát giờ demo — **chủ dự án xác nhận vẫn muốn revert theo đúng bàn giao gốc** (có thể có ưu tiên/thông tin khác ngoài tầm quan sát), đã làm theo sau khi phản biện.
+
+**Đã sửa:** `bill/[id].tsx` — đổi cache key + truyền `args: { billId }` cho cả `fetchContributions` (SlotFilled) và `fetchSharePayers` (SharePaid), bỏ `.filter()` client-side. `eventScan.ts` không cần sửa (`matchesArgs` đã generic sẵn). Giữ nguyên hoàn toàn: `fetchFn` throttle trong `wagmi.ts`, việc bỏ double-throttle, `useProfileData.ts`/`/profile` (không liên quan).
+
+**Verify:** typecheck sạch, dev server render `bill/1` đúng, không lỗi JS. **CHƯA verify tốc độ thật trên mạng sạch** (IP máy dev đã heavy-test cả ngày, benchmark không đáng tin — xem mục RPC throttling phía dưới).
+
+**Việc còn pending:** verify tốc độ tải thật bằng mạng sạch trước demo (ngrok+4G hoặc VPN) — áp dụng cho cả revert này lẫn fix `fetchFn`. Nếu sau demo đo được cache riêng gây chậm rõ rệt khi mở nhiều bill liên tiếp, cân nhắc quay lại cache chung (code đã revert khỏi repo, phải viết lại nếu cần).
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (đồng bộ màu nút toàn app, fix Approve/Pay lẫn lộn, bill detail load chậm)
 
 **1. Đồng bộ màu nút:** `theme.ts` — `colors.buttonPrimary` đổi từ đen (`#17151F`) sang tím (`#998EFF`, đúng CTA landing), `buttonPrimaryHover` sang `#877DE0`. Token trung tâm nên cascade tự động khắp app. Nút "Share bill" (`bill/[id].tsx`) đổi từ gradient riêng (`colors.primary`/`primaryHover`) sang dùng thẳng `colors.buttonPrimary` (phẳng, khớp mọi nút khác).
 

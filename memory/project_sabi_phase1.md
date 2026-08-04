@@ -417,3 +417,34 @@ Sau khi fix `/profile`, chủ dự án báo cả `/profile` lẫn bill detail đ
 - Nếu sau khi verify sạch vẫn còn lỗi nhiều, cân nhắc thử tăng `minIntervalMs` (hiện 400ms) — nhưng PHẢI đo bằng mạng sạch trước, không đoán.
 
 **How to apply:** Trước khi đổi bất kỳ giá trị nào trong `concurrency.ts` (`maxConcurrent`, `minIntervalMs`) hoặc thử lại batch JSON-RPC, đọc lại 4 điểm trên — đặc biệt điểm #1 (batch đã test và loại bỏ) và điểm #4 (benchmark trên IP nhiễm test cũ không đáng tin).
+
+---
+
+## Cập nhật (session sau — REVERT bill detail về cache riêng-theo-bill, filter server-side)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ sửa `bill/[id].tsx` (1 file).
+
+**QUAN TRỌNG — đảo ngược quyết định của chính session ngay phía trên** ("bill detail load chậm: cache dùng chung theo bill + regenerate seed"): section đó đã đổi `fetchContributions`/`fetchSharePayers` sang cache key CHUNG (`sabi-scan-SlotFilled`/`sabi-scan-SharePaid`, không filter server-side) — session NÀY revert lại về cache key RIÊNG theo `billId` + filter server-side qua `args`, theo yêu cầu bàn giao trực tiếp từ chủ dự án (ưu tiên an toàn trước deadline demo hackathon). Đọc phần này SAU cùng để biết trạng thái hiện tại — đừng tin nhầm section "cache dùng chung" ở trên còn hiệu lực.
+
+**Lý do chủ dự án đưa ra trong bàn giao:** filter server-side (`args: { billId }`) giảm khối lượng log mỗi response, giảm rủi ro trước demo; đánh đổi mất khả năng chia sẻ cache giữa các bill được coi là chấp nhận được cho bối cảnh demo.
+
+**Mình đã phản biện bằng bằng chứng TRƯỚC KHI implement (không làm mù theo bàn giao):**
+- Đọc thẳng code `eventScan.ts` xác nhận: số CHUNK cần quét (`ranges.length`) tính từ `startCursor` tới `latestBlock` chia `CHUNK_SIZE` — **hoàn toàn không phụ thuộc `args`**. Filter server-side chỉ giảm kích thước MỖI response, không giảm SỐ REQUEST cần bắn — trái với tiền đề "filter giảm số log/chunk cần quét" trong bàn giao.
+- Claim "trước đây (cache riêng) bill detail luôn load nhanh" mâu thuẫn với dữ liệu đã đo trong 2 session trước: lúc điều tra "bill detail load lâu", code CŨ (cache riêng, có filter) vẫn cần 4 chunk vì gap catch-up 38.952 block — và test bằng `git stash` xác nhận hiện tượng "stuck loading" xảy ra y hệt trên cả bản gốc (cache riêng).
+- Với bối cảnh demo cụ thể (organizer mở NHIỀU bill khác nhau liên tiếp để show), cache riêng khiến MỖI bill mở lần đầu trong buổi demo đều có nguy cơ dính "stuck 20s" (nếu seed đã lùi từ lúc regenerate) — trong khi cache chung chỉ bill ĐẦU TIÊN trả giá đó, các bill sau + `/profile` dùng lại ngay.
+- Đã trình bày rõ 3 điểm trên qua `AskUserQuestion`, đề xuất phương án "giữ cache chung + chỉ regenerate seed sát giờ demo" — **chủ dự án xác nhận vẫn muốn revert theo đúng bàn giao gốc**, có thể có thông tin/ưu tiên khác ngoài tầm quan sát của session (vd yêu cầu từ người khác trong team, hoặc ưu tiên tính dự đoán được của response size hơn tốc độ trung bình). Đã làm theo quyết định cuối của chủ dự án sau khi phản biện — không tự ý làm khác đi.
+
+**Đã sửa:**
+- `fetchContributions`: cache key đổi từ `sabi-scan-SlotFilled` (chung) sang `sabi-scan-SlotFilled-${billId}` (riêng), truyền `args: { billId }` vào `scanEventLogs` (trước đó `undefined`), bỏ `.filter((log) => log.args.billId === billId)` ở client (không cần nữa vì RPC đã filter đúng sẵn).
+- `fetchSharePayers`: tương tự, cache key `sabi-scan-SharePaid-${billId}`.
+- `eventScan.ts`: KHÔNG sửa gì — `matchesArgs(log, args)` đã generic sẵn từ trước, hoạt động đúng ngay với cache key mới.
+- Giữ nguyên hoàn toàn (không đụng): `fetchFn` trong `wagmi.ts` (throttle transport-level), việc bỏ double-throttle ở `eventScan.ts`/`profile.tsx`, `useProfileData.ts`/`/profile` (không liên quan, vốn đã full-scan không filter từ trước, độc lập với thay đổi này).
+- Cache cũ trong localStorage (`sabi-scan-SlotFilled`/`sabi-scan-SharePaid`, key CHUNG của session trước) giờ thành rác — không chủ động xoá, browser tự bỏ qua vì không còn đọc key đó nữa.
+
+**Verify:** `npx tsc --noEmit` sạch. Dev server thật: `bill/1` render đúng (`.sabi-grid-detail` xuất hiện), không lỗi JS console. **CHƯA verify được tốc độ tải thật trên mạng sạch** — theo đúng nguyên tắc đã ghi ở mục "RPC throttling" phía trên (mục 4), benchmark trên IP máy dev (đã heavy-test cả ngày) không đáng tin, cần user tự verify bằng mạng/thiết bị sạch trước khi coi đây là đã xong.
+
+**Việc còn pending:**
+- Verify tốc độ tải thật bằng mạng sạch (ngrok+4G hoặc VPN) trước demo — cả cho fix `fetchFn` (mục "RPC throttling") lẫn revert này.
+- Nếu sau demo muốn cân nhắc lại cache chung (đã verify nhanh hơn cho trường hợp mở nhiều bill liên tiếp), có thể tham khảo lại section "cache dùng chung theo bill" phía trên — code cache-chung không còn trong repo (đã revert), phải viết lại nếu cần.
+
+**How to apply:** Đọc phần "cache dùng chung" phía trên CHỈ để hiểu lịch sử quyết định, KHÔNG áp dụng — trạng thái hiện tại của `bill/[id].tsx` là cache RIÊNG theo `billId` (section này). Nếu sau demo, đo được thật (mạng sạch) rằng cache riêng gây chậm rõ rệt khi user mở nhiều bill liên tiếp, đây là ứng viên hợp lý để cân nhắc quay lại cache chung — nhưng phải có số liệu thật, không suy đoán.
