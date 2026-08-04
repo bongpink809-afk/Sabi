@@ -97,7 +97,7 @@ const Landing: FC = () => {
             </a>
             <a
               className="nav-link"
-              href="https://docs.google.com/forms/d/e/1FAIpQLScWuvJDelu5jk0gU4T0pUsjUt9WXheXT4lUyzlReikUkX8t4Q/viewform?usp=publish-editor"
+              href="https://forms.gle/ixcnfxGZN7yQu4aW6"
               target="_blank"
               rel="noopener noreferrer"
             >
