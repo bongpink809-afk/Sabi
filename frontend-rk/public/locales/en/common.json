@@ -154,6 +154,8 @@
     "empty_state": "No bill to view yet — create a new bill or open an existing bill link.",
     "loading_id": "Loading billId from URL...",
     "loading_info": "Loading bill info...",
+    "load_error": "Couldn't load bill info (RPC error or overloaded). Please try again.",
+    "retry": "Retry",
     "not_found": "Bill not found.",
     "not_found_hint": "Check the link — the billId may be wrong or the bill hasn't been created yet.",
     "page_title_named": "{{name}} — Sabi",

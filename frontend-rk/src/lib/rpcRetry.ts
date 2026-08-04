@@ -22,7 +22,12 @@ function isRateLimited(error: unknown): boolean {
   return false
 }
 
+// failureCount < 3 (trước là 5): cùng lý do đã đổi withRetry429 trong
+// eventScan.ts — 5 lần/backoff x2 cộng dồn tới ~22s cho 1 query kẹt 429 liên
+// tục, đúng lúc query đó là getBill (quyết định "Loading bill info..." biến
+// mất lúc nào) sẽ khiến cả trang treo rất lâu. Giảm còn 3 lần (~5.6s tối đa)
+// — ưu tiên fail nhanh + UI fallback rõ ràng hơn chờ lâu không biết gì.
 export const rpcRetryQueryOptions = {
-  retry: (failureCount: number, error: unknown) => isRateLimited(error) && failureCount < 5,
+  retry: (failureCount: number, error: unknown) => isRateLimited(error) && failureCount < 3,
   retryDelay: (attemptIndex: number) => Math.min(800 * 2 ** attemptIndex, 10000),
 }

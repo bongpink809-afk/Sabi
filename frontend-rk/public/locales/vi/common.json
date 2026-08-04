@@ -154,6 +154,8 @@
     "empty_state": "Chưa có bill nào để xem chi tiết — tạo bill mới hoặc mở link 1 bill có sẵn.",
     "loading_id": "Đang tải billId từ URL...",
     "loading_info": "Đang tải thông tin bill...",
+    "load_error": "Không tải được thông tin bill (RPC lỗi hoặc quá tải). Vui lòng thử lại.",
+    "retry": "Thử lại",
     "not_found": "Không tìm thấy bill này.",
     "not_found_hint": "Kiểm tra lại link — billId có thể sai hoặc bill chưa được tạo.",
     "page_title_named": "{{name}} — Sabi",

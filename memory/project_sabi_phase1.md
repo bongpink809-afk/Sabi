@@ -448,3 +448,30 @@ Sau khi fix `/profile`, chủ dự án báo cả `/profile` lẫn bill detail đ
 - Nếu sau demo muốn cân nhắc lại cache chung (đã verify nhanh hơn cho trường hợp mở nhiều bill liên tiếp), có thể tham khảo lại section "cache dùng chung theo bill" phía trên — code cache-chung không còn trong repo (đã revert), phải viết lại nếu cần.
 
 **How to apply:** Đọc phần "cache dùng chung" phía trên CHỈ để hiểu lịch sử quyết định, KHÔNG áp dụng — trạng thái hiện tại của `bill/[id].tsx` là cache RIÊNG theo `billId` (section này). Nếu sau demo, đo được thật (mạng sạch) rằng cache riêng gây chậm rõ rệt khi user mở nhiều bill liên tiếp, đây là ứng viên hợp lý để cân nhắc quay lại cache chung — nhưng phải có số liệu thật, không suy đoán.
+
+---
+
+## Cập nhật (session sau — giới hạn trần retry/backoff + UI fallback cho bill detail cold-cache)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này sửa 5 file `frontend-rk/`.
+
+**Bối cảnh:** Bàn giao mới phát hiện: mở 1 bill hoàn toàn mới (cold cache, đúng kịch bản người nhận link lần đầu — cũng là kịch bản khả năng cao nhất khi demo) mất tới 31 giây, dù đã có `fetchFn`/`withGlobalConcurrency` (chống burst) và đã revert cache riêng-theo-bill (giảm payload). Bàn giao chẩn đoán: `withRetry429` (5 lần/backoff x2, cộng dồn ~24.8s) là nguyên nhân, đề xuất giảm còn `retries=3`.
+
+**Đã chỉnh 1 điểm quan trọng trong chẩn đoán TRƯỚC khi implement:** `getBill` (query quyết định "Loading bill info..." biến mất lúc nào — chính đường găng bàn giao nêu) **KHÔNG dùng `withRetry429`** — nó dùng `rpcRetryQueryOptions` trong `rpcRetry.ts`, một cơ chế retry HOÀN TOÀN RIÊNG (react-query's `retry`/`retryDelay`, cũng 5 lần nhưng công thức `Math.min(800 * 2**attemptIndex, 10000)`, cộng dồn ~22s). Nếu chỉ sửa `withRetry429` như bàn giao đề xuất, `getBill` vẫn treo ~22s vì đi qua đường hoàn toàn khác — đã sửa CẢ HAI để thật sự đạt mục tiêu.
+
+**Đã sửa:**
+1. `eventScan.ts` — `withRetry429`: `retries` mặc định 5 → 3 (giữ `delayMs=800`), tổng chờ tối đa từ ~24.8s xuống ~5.6s (800→1600→3200ms). Ảnh hưởng: `scanEventLogs` (fetchContributions/fetchSharePayers), `getBlockNumber`/`getTransaction` đơn lẻ dùng lại hàm này.
+2. `rpcRetry.ts` — `rpcRetryQueryOptions`: `failureCount < 5` → `failureCount < 3`, cùng công thức delay (không đổi cap 10000ms vì với 3 lần không bao giờ chạm cap đó — 800/1600/3200 đều dưới 10000). Ảnh hưởng: MỌI `useReadContract`/`useReadContracts` dùng option này — `getBill`, `shareCount`, `getShare` multicall, `allowance`, `useBillsProgress`.
+3. `bill/[id].tsx` — tách nhánh render `billError` (lỗi RPC/hết retry, có thể bill vẫn tồn tại thật) ra khỏi `!bill` (query thành công nhưng không có data). Trước đây gộp chung thành 1 thông báo "Bill not found" — khiến 1 lần RPC nghẽn/429 hết retry hiện NHẦM thành "bill không tồn tại" dù bill vẫn ở đó, và không có cách nào thử lại ngoài F5 cả trang. Giờ `billError` hiện `bill.load_error` ("Couldn't load bill info...") + nút `bill.retry` gọi `refetchBill()` (đã có sẵn từ `useReadContract`, không cần thêm state mới). `!bill` (không có `billError`) vẫn giữ nguyên thông báo `bill.not_found`/`bill.not_found_hint` cũ.
+4. Thêm key `bill.load_error`/`bill.retry` vào `public/locales/{en,vi}/common.json`.
+
+**Trade-off đã cân nhắc (theo đúng tinh thần bàn giao):** giảm số lần retry tăng khả năng fail hẳn thay vì chờ lâu rồi thành công — chấp nhận đánh đổi này cho demo vì UI giờ đã xử lý fail tốt (thông báo rõ + nút Retry) thay vì treo vô thời hạn không biết chuyện gì đang xảy ra.
+
+**Verify:** `npx tsc --noEmit` sạch, JSON locale hợp lệ (`JSON.parse` cả 2 file EN/VI qua node). Dev server thật: `bill/1` render bình thường, không lỗi JS. `bill/999999` (test UI fallback) hiện ĐÚNG "Couldn't load bill info... Retry" thay vì treo — xác nhận cơ chế mới hoạt động thật, dù không chắc lần này là do bill thật sự chưa tồn tại hay do RPC đang nghẽn thật (IP máy dev vẫn nhiễm test cả ngày, xem mục "RPC throttling"). **CHƯA verify sạch** được phân biệt chính xác "not_found" (bill không tồn tại, lẽ ra fail nhanh không retry vì lỗi revert không phải lỗi rate-limit) vs "load_error" (RPC thật sự nghẽn) trong điều kiện mạng bình thường.
+
+**Việc còn pending:**
+- Verify bằng mạng sạch (ngrok+4G hoặc VPN) trước demo: đo lại đúng kịch bản gây vấn đề (bill hoàn toàn mới, cold cache) — mục tiêu tổng thời gian tệ nhất dưới ~10s hoặc fail nhanh với UI rõ ràng, không phải 31s như trước.
+- Kiểm tra thật (mạng sạch) xem `bill/999999` (billId chắc chắn không tồn tại) có hiện đúng `not_found` (fail nhanh, không retry vì lỗi revert ≠ lỗi rate-limit) thay vì `load_error` hay không — hiện tại chưa phân biệt được 2 case này trong điều kiện IP nhiễm.
+- Gộp chung với việc verify `fetchFn` (mục "RPC throttling") và revert cache riêng-theo-bill (mục ngay phía trên) — cả 3 thay đổi đều cần cùng 1 lần verify sạch, không cần làm riêng lẻ.
+
+**How to apply:** Nếu sau này thấy 1 UI khác trong app cũng gộp chung "lỗi RPC" với "không có dữ liệu thật" thành 1 thông báo mù mờ (giống bug `bill.not_found` cũ ở đây), áp dụng đúng pattern đã sửa: tách riêng theo `error` object của query (không phải theo `!data`), hiện thông báo + nút gọi lại `refetch` có sẵn — không cần thêm state riêng, `useReadContract`/`useQuery` đã tự cung cấp `error`/`refetch`.

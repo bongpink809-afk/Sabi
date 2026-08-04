@@ -2,7 +2,25 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (REVERT bill detail về cache riêng-theo-bill, filter server-side)
+## Cập nhật mới nhất (giới hạn trần retry/backoff + UI fallback cho bill detail cold-cache)
+
+Bàn giao phát hiện: mở 1 bill hoàn toàn mới (cold cache, kịch bản demo khả năng cao nhất) mất tới 31s dù đã có `fetchFn`/throttle và revert cache riêng-theo-bill. Chẩn đoán gốc trong bàn giao đề xuất sửa `withRetry429` (5 lần/backoff x2, ~24.8s) — **đã chỉnh 1 điểm trước khi implement:** `getBill` (query quyết định "Loading bill info..." biến mất lúc nào) **không dùng `withRetry429`**, nó dùng `rpcRetryQueryOptions` trong `rpcRetry.ts` — cơ chế RIÊNG (react-query retry, cũng ~22s). Sửa cả 2 mới thật sự đạt mục tiêu.
+
+**Đã sửa:**
+1. `eventScan.ts` — `withRetry429`: `retries` 5 → 3, tổng chờ tối đa ~24.8s → ~5.6s.
+2. `rpcRetry.ts` — `rpcRetryQueryOptions`: `failureCount < 5` → `failureCount < 3`, cùng lý do — ảnh hưởng `getBill`, `shareCount`, `getShare` multicall, `allowance`, `useBillsProgress`.
+3. `bill/[id].tsx` — tách nhánh `billError` (lỗi RPC/hết retry) khỏi `!bill` (không có data thật) — trước đây gộp chung thành "Bill not found", khiến 1 lần 429 hết retry hiện NHẦM thành "bill không tồn tại". Giờ `billError` hiện `bill.load_error` + nút `bill.retry` gọi `refetchBill()` có sẵn.
+4. Thêm key `bill.load_error`/`bill.retry` cho EN/VI.
+
+**Trade-off:** giảm retry tăng khả năng fail hẳn thay vì chờ lâu rồi thành công — chấp nhận vì UI giờ xử lý fail tốt (thông báo + nút Retry) thay vì treo vô thời hạn.
+
+**Verify:** typecheck sạch, JSON locale hợp lệ. `bill/999999` hiện đúng UI fallback mới (không treo) — xác nhận cơ chế hoạt động, nhưng chưa chắc lần này là do bill thật sự không tồn tại hay do IP máy dev vẫn nhiễm rate-limit từ test cả ngày. **Chưa verify sạch** được phân biệt chính xác `not_found` vs `load_error` trong điều kiện mạng bình thường.
+
+**Việc còn pending:** verify bằng mạng sạch (ngrok+4G/VPN) trước demo — gộp chung với việc verify `fetchFn` và revert cache riêng-theo-bill (3 thay đổi liên quan đều cần cùng 1 lần verify sạch). Mục tiêu: cold-cache load dưới ~10s hoặc fail nhanh rõ ràng, không phải 31s như trước.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (REVERT bill detail về cache riêng-theo-bill, filter server-side)
 
 **QUAN TRỌNG — đảo ngược quyết định của mục ngay phía dưới** ("bill detail load chậm: cache dùng chung theo bill + regenerate seed"): mục đó đổi `bill/[id].tsx` sang cache CHUNG cho mọi bill — mục NÀY revert lại về cache RIÊNG theo `billId` + filter server-side, theo yêu cầu bàn giao trực tiếp từ chủ dự án (ưu tiên an toàn trước deadline demo hackathon). **Trạng thái hiện tại (đọc mục này, không phải mục "cache dùng chung" phía dưới):** `fetchContributions`/`fetchSharePayers` dùng cache key `sabi-scan-SlotFilled-${billId}`/`sabi-scan-SharePaid-${billId}`, truyền `args: { billId }` vào `scanEventLogs` để filter server-side, KHÔNG còn filter client-side.
 

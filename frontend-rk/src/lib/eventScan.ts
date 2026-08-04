@@ -94,7 +94,13 @@ function dedupeLogs(logs: CachedRawLog[]): CachedRawLog[] {
 // các lệnh RPC đơn lẻ (getBlockNumber, getTransaction) — tránh viết trùng vòng
 // lặp retry lần thứ 3 trong app (đã có ở đây + getBlockNumberWithRetry riêng
 // trong useLandingStats.ts).
-export async function withRetry429<T>(fn: () => Promise<T>, retries = 5, delayMs = 800): Promise<T> {
+// retries=3: trước đây 5 lần/backoff x2 (800→1600→3200→6400→12800) cộng dồn
+// tới ~24.8s cho 1 request kẹt 429 liên tục — nếu request đó nằm trên đường
+// găng (vd getBill quyết định "Loading bill info..." biến mất lúc nào) làm
+// cả trang treo tới nửa phút, rủi ro thật cho demo. Giảm còn 3 lần
+// (800→1600→3200, tổng tối đa ~5.6s) — ưu tiên "fail nhanh, có UI fallback +
+// nút thử lại" hơn "chờ lâu, im lặng, không biết đang chờ gì".
+export async function withRetry429<T>(fn: () => Promise<T>, retries = 3, delayMs = 800): Promise<T> {
   try {
     return await fn()
   } catch (err) {

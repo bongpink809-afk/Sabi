@@ -507,7 +507,35 @@ const BillDetail: NextPage = () => {
     return <Centered>{t('bill.loading_info')}</Centered>
   }
 
-  if (billError || !bill) {
+  // Tách riêng billError (lỗi RPC/hết retry — có thể thật ra bill vẫn tồn
+  // tại, chỉ là chưa đọc được) khỏi !bill (query thành công nhưng không có
+  // dữ liệu) — trước đây gộp chung thành "Bill not found", khiến 1 lần RPC
+  // nghẽn/429 hết retry hiện nhầm thành "bill không tồn tại" dù bill vẫn ở
+  // đó, và không có cách nào thử lại ngoài F5 cả trang.
+  if (billError) {
+    return (
+      <Centered>
+        <p style={{ color: colors.danger, marginBottom: 8 }}>{t('bill.load_error')}</p>
+        <button
+          onClick={() => refetchBill()}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: colors.danger,
+            background: 'none',
+            border: `1px solid ${colors.danger}`,
+            borderRadius: 6,
+            padding: '6px 14px',
+            cursor: 'pointer',
+          }}
+        >
+          {t('bill.retry')}
+        </button>
+      </Centered>
+    )
+  }
+
+  if (!bill) {
     return (
       <Centered>
         <p style={{ color: colors.danger, marginBottom: 8 }}>{t('bill.not_found')}</p>
