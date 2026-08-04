@@ -515,3 +515,44 @@ Sau khi fix `/profile`, chủ dự án báo cả `/profile` lẫn bill detail đ
 **Việc cần làm trước mỗi lần demo (thao tác vận hành, không phải code):** chạy `npm run sync-firestore` (trong `frontend-rk`) để đồng bộ dữ liệu payment mới nhất lên Firestore trước khi cho người khác xem — service account key + `.env.local` đã sẵn sàng ở máy chủ dự án, chỉ cần chạy lệnh.
 
 **How to apply:** Nếu sau này thêm 1 trang/tính năng MỚI cần hiển thị dữ liệu on-chain (bill/share/payment), đọc từ Firestore theo đúng schema ở mục 2 phía trên — KHÔNG tự thêm `useReadContract`/`scanEventLogs` mới trừ khi có lý do cụ thể (vd cần dữ liệu real-time hơn mức Firestore+script-chạy-tay cho phép). Nếu Firestore trả về mảng rỗng bất thường dù có dữ liệu thật, **luôn kiểm tra Security Rules trước** (console warning `[Firebase] fetch...failed` bị nuốt im lặng trong try/catch, dễ nhầm là "không có dữ liệu" thay vì "bị chặn quyền") — đúng bug đã gặp với collection `payments` ở session này.
+
+---
+
+## Cập nhật (session sau — thêm shareCode ngẫu nhiên cho bill, khoá hẳn route billId số)
+
+**Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — session này chỉ đụng `frontend-rk/`, thêm 1 lớp chống dò link lên trên kiến trúc Firestore đã có (session trước), không đổi Solidity/Foundry.
+
+**Bối cảnh:** URL bill trước đây là `/bill/{billId}` với billId số tuần tự — ai cũng dò được link bill người khác qua chính app (dữ liệu vẫn public on-chain, không phải lỗ hổng bảo mật thật, chỉ ngăn truy cập tình cờ/dò số). 2 bàn giao liên tiếp CÙNG session:
+
+**Bàn giao 1 — thêm shareCode, route dual (numeric fallback + shareCode):**
+- Thêm `nanoid(12)` làm shareCode ngẫu nhiên, lưu `bills/{billId}.shareCode` + collection mới `shareCodes/{code} → {billId}` (mapping ngược, 1 `getDoc` để resolve, không cần query/index).
+- `bill/[id].tsx` tự nhận diện: param URL toàn số → coi là billId cũ (dùng thẳng); không phải số → resolve qua `resolveShareCode()`.
+- Quyết định kiến trúc (khác 2 phương án bàn giao đề xuất — script backfill HOẶC route số song song không backfill): chọn phương án mở rộng — route số vẫn chạy + LAZY-BACKFILL (bill cũ tự sinh shareCode ngay lần đầu ai đó mở lại), không cần script riêng lúc này. Lý do: nhiều chỗ nội bộ (SabiHeader tab, Profile links) đang dùng thẳng billId số, cutover cứng rủi ro cao hơn cho deadline 9/8.
+- **Trước khi implement, verify phát hiện 1 bug thật** (không suy đoán — chủ dự án yêu cầu verify bằng script thật trước khi tin): rule Firestore `bills` đang có `hasOnly(['title','shareNames','slotNames','updatedAt'])` — theo đúng semantics Firestore Rules, `request.resource.data` đại diện TOÀN BỘ document SAU khi ghi (không chỉ field vừa đổi), nên rule này chặn MỌI client write vào bill đã có field do indexer ghi thêm (organizer/mode/contributions...) — tức mọi lượt đổi tên bill/share/slot cho bill đã sync (`saveBillTitle`/`saveBillShareNames`/`saveSingleShareName`) đều silent-fail kể từ session Firestore-migration trước tới giờ (lỗi bị nuốt trong try/catch, chỉ `console.warn`). Verify bằng script Node dùng CLIENT SDK thật ghi lại `title` vào 1 bill có field indexer → `permission-denied` xác nhận đúng. Đã sửa rule `bills` bỏ `hasOnly()`, dùng `allow write: if true` (khớp mức tin cậy demo đã dùng cho `users`/`emailWallets`), verify lại bằng đúng script đó → ghi thành công.
+- Đã hướng dẫn chủ dự án thêm rule mới cho `shareCodes` (`allow read, write: if true`) qua Console, verify write/resolve thật qua client SDK sau khi Publish.
+
+**Bàn giao 2 (ngay sau, cùng session) — khoá hẳn route số, chỉ shareCode:**
+- Yêu cầu: bỏ hẳn fallback numeric — `/bill/{billId số}` phải trả về "not found" y hệt shareCode sai, không còn cách nào lộ billId có tồn tại hay không qua URL.
+- **Bắt buộc chạy script backfill 1 lần TRƯỚC khi khoá route** (lazy-backfill không còn kích hoạt được nữa — không ai vào được `/bill/{billId}` số để trigger nó sau khi khoá). Script mới `scripts/backfill-sharecodes.mjs` (Admin SDK, idempotent — bỏ qua bill đã có shareCode hợp lệ, ĐỂ LẠI trong repo dùng lâu dài, npm script `backfill-sharecodes`).
+- **Bug dữ liệu thật phát hiện lúc chạy backfill** (không do session này gây ra, nhưng phải fix trước khi khoá route): 3 bill (23, 27, 48) có field `shareCode` trên `bills/{id}` nhưng KHÔNG có doc mapping ngược `shareCodes/{code}` — do lúc chủ dự án tự test bàn giao 1, có thời điểm rule `shareCodes` chưa kịp Publish nên 2 lệnh ghi song song (`Promise.all`) chỉ 1 cái qua được (`bills.shareCode`), cái còn lại (`shareCodes/{code}`) `permission-denied`, lỗi bị nuốt trong `.catch(() => {})`. Bản đầu script backfill chỉ check "đã có field shareCode" nên bỏ sót đúng 3 bill "mồ côi" này — đã sửa script để verify CÓ THẬT mapping ngược trỏ đúng billId, không chỉ check field tồn tại. Chạy lại, verify: **48/48 bill khớp hoàn toàn** (đếm doc `bills` = đếm doc `shareCodes`, không doc nào trỏ sai — verify bằng script đối chiếu 2 chiều, không chỉ đếm số lượng).
+- `bill/[id].tsx`: bỏ `isLegacyNumericId` — mọi param URL đều qua `resolveShareCode()`. Param dạng số tự động rơi vào nhánh not-found chung (không cần code phân biệt, vì `shareCodes/{số}` không tồn tại — cùng 1 đường code, không branching). Bỏ cơ chế lazy-backfill (dead code sau khi route khoá — mọi bill vào được trang chắc chắn đã có shareCode hợp lệ nhờ backfill).
+- `SabiHeader.tsx`: tách 2 khái niệm — `currentBillId` (chỉ để hiện NHÃN "Bill #n", CHỈ trang `/bill/[id]` tự biết số này) và `currentShareCode` (dùng cho HREF thật + "nhớ" cho trang khác qua localStorage, đổi key `sabi-last-bill-id` → `sabi-last-share-code`). Đứng ở `/create`/`/profile` (chỉ nhớ được shareCode từ trước) → nhãn fallback về "Chi tiết bill" chung chung, không hiện số — đánh đổi đã hỏi và chủ dự án xác nhận chấp nhận được (tránh tốn 1 lượt đọc Firestore chỉ để hiện label).
+- `useProfileData.ts`/`firebase.ts`: `CreatedBill`/`PaymentMade` thêm field `shareCode`. `billsCreated` lấy free từ doc đã fetch sẵn; `paymentsMade` cần fetch thêm (hàm mới `fetchShareCodesByBillIds`, batch `getDoc` giống `fetchBillTitles` — KHÔNG đổi `fetchBillTitles` để tránh vỡ hợp đồng ở 2 nơi đang dùng nó) vì bill user TRẢ VÀO có thể không phải bill họ TẠO.
+- `profile.tsx`: `CreatedBillRow`/`PaymentRow` đổi href sang shareCode; khi thiếu (không nên xảy ra sau backfill, có xử lý phòng hờ) → card hiện non-interactive (giảm opacity, không `<Link>`/`onClick`) thay vì build ra `/bill/undefined`.
+
+**Verify (browser thật, Playwright cài tạm ở scratchpad session — KHÔNG phải dependency repo):**
+- `/bill/49` (billId số có thật trên chain) → "Bill not found."
+- `/bill/khongtontai123456` (chuỗi bậy bạ) → nội dung **giống hệt byte-for-byte** với test trên (so sánh string trực tiếp trong script Playwright) — xác nhận đúng yêu cầu "không lộ khác biệt qua UI".
+- shareCode thật (bill 0, `lEhEdU-RfHA3`) → load đúng dữ liệu thật (BILL #0, tiến độ, danh sách share); tab header nhãn `"Bill detail #0"` nhưng href thật `/bill/lEhEdU-RfHA3` — xác nhận đúng thiết kế tách nhãn/href.
+- `npx tsc --noEmit`, `npm run build` sạch.
+
+**CHƯA verify (cần ví thật, môi trường không có ví/extension):**
+- `/profile` sau khi connect ví thật — bấm từng dòng "Bills created"/"Bills paid" ra đúng shareCode (logic đã review kỹ + typecheck sạch, nhưng chưa click tay).
+- Luồng tạo bill mới thật sau khi khoá route (link/QR/Share ra shareCode ngay từ đầu) — cơ chế không đổi so với bàn giao 1 (đã verify trước đó), nhưng chưa re-test riêng trong bàn giao 2.
+
+**Việc còn pending (không đổi so với session Firestore-migration, session này không chạm tới):** README.md gốc repo chưa cập nhật kiến trúc mới; optimistic overlay cross-chain chưa verify riêng.
+
+**How to apply:**
+- Rule `bills` hiện tại là `allow write: if true` (không còn `hasOnly()`) — thêm field mới vào schema `bills` KHÔNG cần sửa rule mỗi lần, đây chính là bài học từ bug đã fix trong session này.
+- **Bất kỳ collection Firestore mới nào cũng phải thêm Security Rule NGAY LÚC TẠO, không để tới lúc code xong mới nhớ** — đã gặp đúng loại bug này 2 lần liên tiếp (`payments` ở session trước gây `/profile` rỗng im lặng; `shareCodes` ở session này gây 3 bill "mồ côi" mapping) vì cùng 1 nguyên nhân gốc: quên add rule trước khi test ghi thật. Luôn verify bằng 1 lệnh ghi/đọc thật qua client SDK ngay sau khi thêm collection mới, đừng đợi tới lúc có bug report.
+- Nếu nghi ngờ 1 collection Firestore có dữ liệu "mồ côi"/không nhất quán (field A trỏ tới B nhưng B không tồn tại), viết script đối chiếu 2 CHIỀU (không chỉ đếm tổng số) — đúng cách đã phát hiện ra 3 bill mồ côi ở session này mà lần đếm số lượng đơn giản ban đầu (48 bill = 48 "đã có field") không bắt được.

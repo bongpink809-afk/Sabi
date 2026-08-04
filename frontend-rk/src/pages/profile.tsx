@@ -565,30 +565,23 @@ function ModeBadge({ mode }: { mode: number }) {
 function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progress: BillProgress | undefined; titleMap: Record<string, string> }) {
   const router = useRouter()
   const { t } = useTranslation('common')
-  const href = `/bill/${bill.billId.toString()}`
+  // Route billId số đã khoá — chỉ shareCode mới link được. Không nên xảy ra
+  // sau khi chạy scripts/backfill-sharecodes.mjs, nhưng nếu vì lý do nào đó
+  // field bị thiếu, hiện card KHÔNG click được thay vì build ra "/bill/undefined".
+  const href = bill.shareCode ? `/bill/${bill.shareCode}` : undefined
 
   // Prefetch ngay khi danh sách render — bấm vào nhảy liền, không chờ Next.js
   // compile route lần đầu (dev mode compile route theo yêu cầu, gây cảm giác "hơi lâu")
   useEffect(() => {
+    if (!href) return
     router.prefetch(href)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [href])
 
   const isDone = progress !== undefined && progress.totalCount > 0 && progress.paidCount >= progress.totalCount
 
-  return (
-    <Link
-      href={href}
-      className="bill-card"
-      style={{
-        display: 'block',
-        padding: '12px 14px',
-        background: colors.surface,
-        border: `1px solid ${colors.border}`,
-        borderRadius: 10,
-        textDecoration: 'none',
-      }}
-    >
+  const content = (
+    <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
         <span style={{ color: colors.textPrimary, fontSize: 14, fontWeight: 600 }}>{getBillTitleFromMap(bill.billId, titleMap)}</span>
         <span style={{ color: colors.textMuted, fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
@@ -618,7 +611,29 @@ function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progr
         {progress ? `${progress.paidCount}/${progress.totalCount} ${t('profile.paid_suffix')} · ` : ''}
         {formatUnits(bill.totalAmount, 6)} USDC
       </div>
+    </>
+  )
 
+  const cardStyle: React.CSSProperties = {
+    display: 'block',
+    padding: '12px 14px',
+    background: colors.surface,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    textDecoration: 'none',
+  }
+
+  if (!href) {
+    return (
+      <div className="bill-card" style={{ ...cardStyle, opacity: 0.6 }}>
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <Link href={href} className="bill-card" style={cardStyle}>
+      {content}
       <style jsx>{`
         :global(a.bill-card) {
           transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
@@ -637,10 +652,12 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   const router = useRouter()
   const { t } = useTranslation('common')
   const publicClient = usePublicClient({ chainId: arcTestnet.id })
-  const href = `/bill/${payment.billId.toString()}`
+  // Route billId số đã khoá — chỉ shareCode mới link được, xem CreatedBillRow.
+  const href = payment.shareCode ? `/bill/${payment.shareCode}` : undefined
 
   // Prefetch ngay khi danh sách render — lý do giống CreatedBillRow ở trên
   useEffect(() => {
+    if (!href) return
     router.prefetch(href)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [href])
@@ -671,13 +688,14 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   return (
     <div
       className="bill-card"
-      onClick={() => router.push(href)}
+      onClick={href ? () => router.push(href) : undefined}
       style={{
         padding: '12px 14px',
         background: colors.surface,
         border: `1px solid ${colors.border}`,
         borderRadius: 10,
-        cursor: 'pointer',
+        cursor: href ? 'pointer' : 'default',
+        opacity: href ? 1 : 0.6,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>

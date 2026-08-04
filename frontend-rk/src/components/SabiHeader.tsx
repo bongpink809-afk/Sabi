@@ -16,13 +16,15 @@ const GAS_FAUCET_LINKS = [
   { label: 'Ethereum Sepolia', href: 'https://www.alchemy.com/faucets/ethereum-sepolia' },
 ] as const
 
-const LAST_BILL_ID_KEY = 'sabi-last-bill-id'
+const LAST_SHARE_CODE_KEY = 'sabi-last-share-code'
 
-// Lưu billId gần nhất đã tạo/xem — để tab "Chi tiết bill" ở trang /create và /profile
-// có chỗ để trỏ tới (thay vì biến mất khi không đứng trên trang /bill/[id]).
-export function rememberLastBillId(billId: string) {
+// Lưu shareCode gần nhất đã tạo/xem — để tab "Chi tiết bill" ở trang /create và
+// /profile có chỗ để trỏ tới (thay vì biến mất khi không đứng trên trang
+// /bill/[id]). Route billId số đã bị khoá (chỉ shareCode vào được bill detail),
+// nên PHẢI nhớ shareCode chứ không phải billId — nhớ billId sẽ tạo ra link chết.
+export function rememberLastShareCode(shareCode: string) {
   if (typeof window === 'undefined') return
-  localStorage.setItem(LAST_BILL_ID_KEY, billId)
+  localStorage.setItem(LAST_SHARE_CODE_KEY, shareCode)
 }
 
 // Header + tab-bar dùng chung cho cả 3 trang thật (/create, /bill/[id] hoặc /bill, /profile) —
@@ -30,22 +32,28 @@ export function rememberLastBillId(billId: string) {
 // hàng tab bên dưới (hàng tab nổi trên nền lavender của trang, không dính vào thanh trắng).
 // Tab là link Next.js thật tới 3 route khác nhau — KHÔNG phải state JS gộp 1 trang
 // như bản demo tĩnh, mỗi bill vẫn có URL riêng để share.
-export function SabiHeader({ currentBillId }: { currentBillId?: string }) {
+//
+// currentBillId (số, chỉ để hiện NHÃN "Bill #n" — CHỈ trang /bill/[id] tự nó mới
+// biết số này) và currentShareCode (dùng để build HREF thật, và để "nhớ" cho các
+// trang khác) là 2 khái niệm tách rời cố ý: đứng ở /create hay /profile, ta chỉ
+// còn nhớ được shareCode (đã lưu ở lần trước), không tra ngược ra số làm nhãn vì
+// tốn thêm 1 lượt đọc Firestore chỉ để hiện label — chấp nhận nhãn chung chung hơn.
+export function SabiHeader({ currentBillId, currentShareCode }: { currentBillId?: string; currentShareCode?: string }) {
   const router = useRouter()
   const { t } = useTranslation('common')
-  const [lastBillId, setLastBillId] = useState<string | null>(null)
+  const [lastShareCode, setLastShareCode] = useState<string | null>(null)
 
   useEffect(() => {
-    if (currentBillId) {
-      rememberLastBillId(currentBillId)
+    if (currentShareCode) {
+      rememberLastShareCode(currentShareCode)
       return
     }
-    setLastBillId(localStorage.getItem(LAST_BILL_ID_KEY))
-  }, [currentBillId, router.asPath])
+    setLastShareCode(localStorage.getItem(LAST_SHARE_CODE_KEY))
+  }, [currentShareCode, router.asPath])
 
-  const billTabId = currentBillId ?? lastBillId
-  const billTabHref = billTabId ? `/bill/${billTabId}` : '/bill'
-  const billTabLabel = billTabId ? t('nav.bill_detail_id', { id: billTabId }) : t('nav.bill_detail')
+  const billTabShareCode = currentShareCode ?? lastShareCode
+  const billTabHref = billTabShareCode ? `/bill/${billTabShareCode}` : '/bill'
+  const billTabLabel = currentBillId ? t('nav.bill_detail_id', { id: currentBillId }) : t('nav.bill_detail')
 
   const isHome = router.pathname === '/create'
   const isBillDetail = router.pathname === '/bill/[id]' || router.pathname === '/bill'

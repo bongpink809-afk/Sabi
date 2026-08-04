@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchBillsByOrganizer, fetchPaymentsByPayer } from '../lib/firebase'
+import { fetchBillsByOrganizer, fetchPaymentsByPayer, fetchShareCodesByBillIds } from '../lib/firebase'
 
 export interface CreatedBill {
   billId: bigint
@@ -15,6 +15,8 @@ export interface CreatedBill {
   matchedSlotsCount: number
   shareCount: number
   paidShareCount: number
+  // Route billId số đã khoá — chỉ shareCode mới link được vào bill detail.
+  shareCode: string | undefined
 }
 
 export interface PaymentMade {
@@ -22,6 +24,7 @@ export interface PaymentMade {
   amount: bigint
   txHash: `0x${string}`
   blockNumber: bigint
+  shareCode: string | undefined
 }
 
 interface ProfileData {
@@ -62,9 +65,19 @@ async function fetchProfileData(address: `0x${string}`) {
         matchedSlotsCount: b.matchedSlotsCount ?? 0,
         shareCount: shares.length,
         paidShareCount: shares.filter((s) => s.paid).length,
+        shareCode: b.shareCode,
       }
     })
     .sort(byBlockDesc)
+
+  // shareCode của billsCreated đã có sẵn (field trong doc vừa fetch ở trên) —
+  // chỉ cần fetch thêm cho billId nào của paymentsMade CHƯA có trong đó (bill
+  // user trả vào nhưng không phải người tạo).
+  const knownShareCodes = new Map(created.map((b) => [b.billId.toString(), b.shareCode]))
+  const missingBillIds = Array.from(
+    new Set(firestorePayments.map((p) => p.billId).filter((id) => !knownShareCodes.has(id)))
+  )
+  const extraShareCodes = missingBillIds.length > 0 ? await fetchShareCodesByBillIds(missingBillIds) : {}
 
   const payments: PaymentMade[] = firestorePayments
     .map((p) => ({
@@ -72,6 +85,7 @@ async function fetchProfileData(address: `0x${string}`) {
       amount: BigInt(p.amount),
       txHash: p.txHash as `0x${string}`,
       blockNumber: BigInt(p.blockNumber),
+      shareCode: knownShareCodes.get(p.billId) ?? extraShareCodes[p.billId],
     }))
     .sort(byBlockDesc)
 

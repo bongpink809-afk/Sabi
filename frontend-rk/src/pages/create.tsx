@@ -13,7 +13,7 @@ import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
 import { colors } from '../styles/theme'
 import { ModeCard } from '../components/ModeCard'
 import { saveBillTitle, saveBillShareNames } from '../hooks/useFirebaseSync'
-import { updateBillData } from '../lib/firebase'
+import { updateBillData, generateAndSaveShareCode } from '../lib/firebase'
 
 import { SabiHeader } from '../components/SabiHeader'
 import { SabiLogo } from '../components/SabiLogo'
@@ -92,6 +92,14 @@ const Home: NextPage = () => {
           const newBillId = logs[0].args.billId as bigint
           const billIdStr = newBillId.toString()
 
+          // shareCode ngẫu nhiên dùng làm URL chia sẻ công khai — thay billId
+          // số tuần tự (chống dò link qua app, xem firebase.ts). Sinh + lưu
+          // TRƯỚC khi push route, để trang đích resolve được ngay lần load đầu.
+          let shareCode: string | undefined
+          if (address && receipt) {
+            shareCode = await generateAndSaveShareCode(billIdStr)
+          }
+
           // Ghi ngay dữ liệu on-chain lên Firestore (client SDK) — script
           // scripts/sync-firestore.mjs chỉ chạy tay trước demo nên KHÔNG kịp
           // có ngay lúc này; thiếu bước này trang /bill/[id] sẽ hiện "not found"
@@ -165,8 +173,9 @@ const Home: NextPage = () => {
           // (mobile Safari/Chrome đôi khi chưa persist khi navigate ngay)
           await new Promise((r) => setTimeout(r, 80))
 
-          // Sang trang chi tiết bill — thay vì /profile để user thấy ngay hóa đơn
-          router.push(`/bill/${billIdStr}`)
+          // Sang trang chi tiết bill — thay vì /profile để user thấy ngay hóa đơn.
+          // Dùng shareCode (không phải billId số) làm URL, đúng link sẽ đem đi chia sẻ.
+          router.push(`/bill/${shareCode ?? billIdStr}`)
         } else {
           console.error('Không tìm thấy event BillCreated trong log')
           // Vẫn navigate về profile để user không bị kẹt màn hình

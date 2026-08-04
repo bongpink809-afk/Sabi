@@ -19,6 +19,7 @@ import {
   Unsubscribe,
 } from 'firebase/firestore'
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage'
+import { nanoid } from 'nanoid'
 
 // ─── Cấu hình Firebase — đọc từ biến môi trường ───────────────────────────
 // Lấy giá trị từ https://console.firebase.google.com → Project settings → Your apps
@@ -68,11 +69,20 @@ function getStorageInstance() {
 //      blockNumber:       number
 //      contributions:     BillContributionDoc[]  — mode OPEN_SLOT
 //      shares:            BillShareDoc[]         — mode ASSIGNED, luôn đủ numSlots phần tử
+//      ─── Field dưới do CLIENT ghi (lúc tạo bill, hoặc lazy-backfill lần đầu mở
+//      bill cũ) — không phải script indexer ───────────────────────────────────
+//      shareCode:         string  — mã ngẫu nhiên dùng làm URL chia sẻ public,
+//                                    thay cho billId số tuần tự (chống dò link)
 //
 //  Collection "payments" (1 doc/lượt trả — dùng để tra "user X đã trả những gì",
 //  Firestore không query tốt trên field lồng trong array nên tách riêng):
 //    payments/{txHash}-{logIndex}
 //      billId, shareId (null nếu OPEN_SLOT), payer, amount, matched, txHash, blockNumber
+//
+//  Collection "shareCodes" (mapping ngược shareCode → billId, để resolve URL
+//  công khai bằng đúng 1 lệnh getDoc, không cần query field trong "bills"):
+//    shareCodes/{shareCode}     ← shareCode chính là document ID
+//      billId: string
 //
 //  Collection "users" (hồ sơ — chỉ owner ví này mới cần sync):
 //    users/{walletAddress}     ← lowercase, dùng luôn làm document ID
@@ -99,6 +109,9 @@ function getStorageInstance() {
 //   match /payments/{paymentId} {
 //     allow read: if true;   // client chỉ đọc — chỉ scripts/sync-firestore.mjs
 //     allow write: if false; // (Admin SDK) mới ghi được, bypass rule này
+//   }
+//   match /shareCodes/{shareCode} {
+//     allow read, write: if true; // demo — production nên hạn chế
 //   }
 
 // ─── Type definitions ──────────────────────────────────────────────────────
@@ -138,6 +151,8 @@ export interface BillFirestoreData {
   blockNumber?: number
   contributions?: BillContributionDoc[]
   shares?: BillShareDoc[]
+  // Do CLIENT ghi (tạo bill / lazy-backfill), xem comment "shareCodes" phía trên.
+  shareCode?: string
 }
 
 export interface PaymentDoc {
@@ -186,6 +201,43 @@ export async function updateBillData(
 }
 
 /**
+ * Resolve shareCode (mã trong URL chia sẻ, vd `/bill/aB3xQ...`) → billId thật.
+ * Trả `null` nếu không tồn tại HOẶC lỗi — bên gọi không được phân biệt 2
+ * trường hợp này khi hiển thị (tránh lộ qua thông báo lỗi việc shareCode có
+ * từng tồn tại hay không).
+ */
+export async function resolveShareCode(shareCode: string): Promise<string | null> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return null
+  try {
+    const db = getDb()
+    const snap = await getDoc(doc(db, 'shareCodes', shareCode))
+    if (!snap.exists()) return null
+    const data = snap.data() as { billId?: string }
+    return data.billId ?? null
+  } catch (err) {
+    console.warn('[Firebase] resolveShareCode failed:', err)
+    return null
+  }
+}
+
+/**
+ * Sinh 1 shareCode ngẫu nhiên mới cho bill, ghi vào cả `bills/{billId}.shareCode`
+ * lẫn mapping ngược `shareCodes/{shareCode}` → `{billId}`. Dùng chung cho lúc
+ * tạo bill mới (create.tsx) VÀ lazy-backfill cho bill cũ chưa có shareCode
+ * (bill/[id].tsx, lần đầu ai đó mở trang) — xem memory/project_sabi_phase1.md
+ * để biết vì sao không dùng script backfill riêng.
+ */
+export async function generateAndSaveShareCode(billId: string): Promise<string> {
+  const shareCode = nanoid(12)
+  const db = getDb()
+  await Promise.all([
+    updateBillData(billId, { shareCode }),
+    setDoc(doc(db, 'shareCodes', shareCode), { billId }),
+  ])
+  return shareCode
+}
+
+/**
  * Batch fetch nhiều bill title cùng lúc — dùng trong trang Profile để hiện tên
  * các bill mà user đã tạo. Trả về map billId → title (chỉ những bill có title).
  */
@@ -213,6 +265,35 @@ export async function fetchBillTitles(
     return results
   } catch (err) {
     console.warn('[Firebase] fetchBillTitles failed:', err)
+    return {}
+  }
+}
+
+/**
+ * Batch fetch shareCode của nhiều bill cùng lúc — dùng ở trang Profile cho danh
+ * sách "Bills paid" (bill người dùng TRẢ VÀO, không chắc trùng với bill họ TẠO
+ * nên không có sẵn shareCode như `CreatedBill`). Trả về map billId → shareCode
+ * (chỉ những bill đã có shareCode).
+ */
+export async function fetchShareCodesByBillIds(
+  billIds: string[]
+): Promise<Record<string, string>> {
+  if (typeof window === 'undefined' || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return {}
+  try {
+    const db = getDb()
+    const results: Record<string, string> = {}
+    await Promise.all(
+      billIds.map(async (id) => {
+        const snap = await getDoc(doc(db, 'bills', id))
+        if (snap.exists()) {
+          const data = snap.data() as BillFirestoreData
+          if (data.shareCode) results[id] = data.shareCode
+        }
+      })
+    )
+    return results
+  } catch (err) {
+    console.warn('[Firebase] fetchShareCodesByBillIds failed:', err)
     return {}
   }
 }

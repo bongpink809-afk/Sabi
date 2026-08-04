@@ -2,7 +2,27 @@
 
 Sabi là Split Bill dApp trên Arc Testnet dùng USDC + CCTP V2 (Fast Transfer). Portfolio project, test thật với nhóm bạn builder trên Arc Testnet — testnet only, không mainnet. Nộp Arc Architects Program hạn 9/8.
 
-## Cập nhật mới nhất (đổi kiến trúc đọc dữ liệu: RPC trực tiếp → Firestore đã index sẵn)
+## Cập nhật mới nhất (thêm shareCode ngẫu nhiên cho bill, khoá hẳn route billId số)
+
+URL bill trước là `/bill/{billId}` số tuần tự — dò được link bill người khác qua chính app (dữ liệu vẫn public on-chain, không phải lỗ hổng bảo mật thật). 2 bàn giao liên tiếp cùng session:
+
+**1. Thêm shareCode (`nanoid(12)`), route dual ban đầu:** `bills/{billId}.shareCode` + collection mới `shareCodes/{code} → {billId}` (mapping ngược, 1 `getDoc` để resolve). `bill/[id].tsx` tự nhận diện param URL toàn số (billId cũ, dùng thẳng) hay không (resolve qua Firestore). Route số vẫn chạy song song + lazy-backfill (bill cũ tự sinh shareCode khi mở lại) — chọn hướng này thay vì cutover cứng vì nhiều chỗ nội bộ (SabiHeader, Profile) còn dùng billId số.
+
+**Bug thật phát hiện TRƯỚC khi code (verify bằng script, không suy đoán):** rule Firestore `bills` có `hasOnly(['title','shareNames','slotNames','updatedAt'])` — theo semantics Firestore Rules, `request.resource.data` là TOÀN BỘ document sau khi ghi, nên rule này chặn MỌI client write vào bill đã có field do indexer ghi thêm (organizer/mode/contributions...) — mọi lượt đổi tên bill/share cho bill đã sync đều **silent-fail từ session Firestore-migration trước tới giờ** (lỗi nuốt trong try/catch). Verify bằng client SDK ghi thật → `permission-denied` xác nhận. Fix: bỏ `hasOnly()`, dùng `allow write: if true` (khớp mức tin cậy demo các collection khác), verify lại → ghi thành công.
+
+**2. Bàn giao ngay sau — khoá hẳn route số:** `/bill/{billId số}` phải "not found" y hệt shareCode sai, không lộ khác biệt. **Bắt buộc backfill 1 lần trước khi khoá** (lazy-backfill hết tác dụng vì không ai vào được route số nữa để trigger) — script mới `scripts/backfill-sharecodes.mjs` (Admin SDK, idempotent, giữ lại trong repo).
+
+**Bug dữ liệu thật phát hiện lúc backfill:** 3 bill (23, 27, 48) có field `shareCode` trên `bills` nhưng KHÔNG có doc mapping ngược `shareCodes/{code}` — do lúc test bàn giao 1, rule `shareCodes` có lúc chưa Publish, 1 trong 2 lệnh ghi song song (`Promise.all`) bị `permission-denied` âm thầm. Bản đầu backfill chỉ check "đã có field shareCode" nên bỏ sót — sửa script verify CÓ THẬT mapping ngược đúng billId, không chỉ check field tồn tại. Chạy lại: **48/48 bill khớp hoàn toàn** (đối chiếu 2 chiều, không chỉ đếm số lượng).
+
+**Đã sửa:** `bill/[id].tsx` bỏ hẳn nhánh billId số + lazy-backfill (dead code sau khi khoá route). `SabiHeader.tsx` tách `currentBillId` (chỉ hiện nhãn "Bill #n", trang bill detail tự biết) khỏi `currentShareCode` (href thật + nhớ localStorage, đổi key) — đứng ở trang khác chỉ nhớ được shareCode nên nhãn fallback về "Chi tiết bill" chung (đánh đổi đã hỏi, chủ dự án chấp nhận). `useProfileData.ts`/`firebase.ts` thêm `shareCode` vào `CreatedBill`/`PaymentMade` (hàm mới `fetchShareCodesByBillIds`, không đổi `fetchBillTitles` cũ). `profile.tsx` đổi href sang shareCode, ẩn/disable link khi thiếu thay vì build `/bill/undefined`.
+
+**Verify bằng browser thật (Playwright cài tạm scratchpad, không phải dependency repo):** `/bill/49` (billId thật) → "Bill not found."; `/bill/khongtontai123456` (bậy bạ) → **nội dung giống hệt byte-for-byte**; shareCode thật (bill 0) → load đúng dữ liệu, header nhãn "Bill detail #0" nhưng href thật là shareCode. `tsc`/`build` sạch. Chưa verify: `/profile` + tạo bill mới bằng ví thật (môi trường không có ví).
+
+**How to apply — bài học lặp lại 2 lần trong 2 session liên tiếp:** collection Firestore mới PHẢI có Security Rule ngay lúc tạo, không đợi tới lúc có bug report (`payments` session trước gây `/profile` rỗng im lặng; `shareCodes` session này gây 3 bill mồ côi mapping — cùng 1 nguyên nhân gốc). Nghi ngờ dữ liệu "mồ côi" thì viết script đối chiếu 2 chiều, đếm số lượng đơn thuần không bắt được loại lỗi này.
+
+Chi tiết đầy đủ: xem `memory/project_sabi_phase1.md`.
+
+## Cập nhật trước đó (đổi kiến trúc đọc dữ liệu: RPC trực tiếp → Firestore đã index sẵn)
 
 **Vẫn KHÔNG tự gán "hoàn thành" cho phase nào** — đây là thay đổi kiến trúc lớn nhất từ trước tới giờ cho phần đọc dữ liệu hiển thị, chủ dự án đã xác nhận trực tiếp "hoạt động tốt" sau khi fix xong lượt bug đầu tiên, nhưng còn vài edge case chưa test tay (xem mục pending).
 

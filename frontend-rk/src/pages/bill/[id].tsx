@@ -24,6 +24,7 @@ import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
 import type { UserFirestoreData, BillContributionDoc, BillShareDoc, BillFirestoreData } from '../../lib/firebase'
+import { resolveShareCode } from '../../lib/firebase'
 import { useCircleWallet, useCircleContractCall } from '../../contexts/CircleWalletContext'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
@@ -67,7 +68,26 @@ const BillDetail: NextPage = () => {
   const router = useRouter()
   const { t } = useTranslation('common')
   const { id } = router.query
-  const billId = typeof id === 'string' && id !== '' ? BigInt(id) : undefined
+  const rawId = typeof id === 'string' && id !== '' ? id : undefined
+
+  // Route số cũ (/bill/15) ĐÃ KHOÁ — mọi param URL đều coi là shareCode, luôn
+  // resolve qua Firestore, không còn nhánh billId số nào chạy thẳng nữa (xem
+  // memory/project_sabi_phase1.md). `undefined` = chưa xác định xong,
+  // `null` = shareCode không tồn tại (kể cả khi param gõ tay là 1 số).
+  const [resolvedShareCodeBillId, setResolvedShareCodeBillId] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!rawId) return
+    setResolvedShareCodeBillId(undefined)
+    resolveShareCode(rawId).then(setResolvedShareCodeBillId)
+  }, [rawId])
+
+  const billIdStr = resolvedShareCodeBillId ?? undefined
+  const billId = billIdStr !== undefined ? BigInt(billIdStr) : undefined
+  // Chỉ true khi ĐÃ CHẮC CHẮN không resolve được (không phải đang chờ) — dùng
+  // để hiện "not found" ngay. Vì billId số KHÔNG còn nhánh riêng, param dạng
+  // số (vd "49") đi qua ĐÚNG 1 đường resolve này như mọi shareCode khác —
+  // tự động không lộ khác biệt qua UI giữa "số" và "shareCode sai".
+  const shareCodeNotFound = rawId !== undefined && resolvedShareCodeBillId === null
 
   const { address: connectedAddress } = useAccount()
   const { switchChainAsync } = useSwitchChain()
@@ -204,6 +224,12 @@ const BillDetail: NextPage = () => {
   useProfilesSync(bill ? [bill.organizer] : [], (fetched) => {
     setProfiles((prev) => ({ ...prev, ...fetched }))
   })
+
+  // Nguồn shareCode dùng cho link chia sẻ/QR/tab header — route số cũ đã khoá
+  // (xem đầu component) nên mọi bill vào tới đây chắc chắn đã resolve qua 1
+  // shareCode có thật (đã backfill đủ 1 lần, script scripts/backfill-sharecodes.mjs) —
+  // không còn cần lazy-backfill tại chỗ như trước.
+  const effectiveShareCode = onchainBill?.shareCode
 
   // Cho phép người xem tự đặt tên nếu creator chưa đặt lúc tạo bill —
   // ghi vào cả localStorage lẫn Firestore để thiết bị khác thấy được ngay
@@ -437,6 +463,13 @@ const BillDetail: NextPage = () => {
   }
 
   // ─── Render ────────────────────────────────────────────────────────────────
+  // shareCode chắc chắn không resolve được → hiện NGAY, dùng chung UI với `!bill`
+  // phía dưới (billId số không tồn tại) — không được để lộ qua thông báo khác
+  // nhau việc shareCode có từng trỏ tới billId thật hay không.
+  if (shareCodeNotFound) {
+    return <NotFoundBill />
+  }
+
   if (billId === undefined) {
     return <Centered>{t('bill.loading_id')}</Centered>
   }
@@ -446,14 +479,7 @@ const BillDetail: NextPage = () => {
   }
 
   if (!bill) {
-    return (
-      <Centered>
-        <p style={{ color: colors.danger, marginBottom: 8 }}>{t('bill.not_found')}</p>
-        <p style={{ color: colors.textSecondary, fontSize: 14 }}>
-          {t('bill.not_found_hint')}
-        </p>
-      </Centered>
-    )
+    return <NotFoundBill />
   }
 
   // Tiến độ thu tiền — ASSIGNED derive thẳng từ `shares` (đã có sẵn từ Firestore
@@ -473,7 +499,7 @@ const BillDetail: NextPage = () => {
   // hoặc luôn hiện trên desktop. Trước đây chỉ check navigator.share tồn tại, nhưng
   // Windows Edge/Chrome cũng có navigator.share (mở share dialog của Windows, không
   // kiểm soát được icon/thứ tự) → phải check thêm userAgent mobile thật.
-  const billUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/bill/${billId.toString()}`
+  const billUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/bill/${effectiveShareCode ?? billId.toString()}`
   const organizerProfile = profiles[bill.organizer.toLowerCase()]
   const creatorName = organizerProfile?.profileName ?? `${bill.organizer.slice(0, 6)}…${bill.organizer.slice(-4)}`
   const shareText = t('bill.share_text', { creator: creatorName, amount: formatUnits(bill.totalAmount, 6) })
@@ -493,7 +519,7 @@ const BillDetail: NextPage = () => {
         <title>{billTitle ? t('bill.page_title_named', { name: billTitle }) : t('bill.page_title_id', { id: billId.toString() })}</title>
       </Head>
 
-      <SabiHeader currentBillId={billId.toString()} />
+      <SabiHeader currentBillId={billId.toString()} currentShareCode={effectiveShareCode} />
 
       <main className="sabi-page-main" style={{ padding: '24px 16px 40px' }}>
         <div
@@ -520,6 +546,7 @@ const BillDetail: NextPage = () => {
               contributions={contributions}
               slotNames={slotNames}
               profiles={profiles}
+              billUrl={billUrl}
             />
 
             <button
@@ -675,6 +702,19 @@ function Centered({ children }: { children: React.ReactNode }) {
   )
 }
 
+// Dùng chung cho cả 2 case "không tìm thấy bill": shareCode không resolve
+// được, VÀ billId hợp lệ nhưng không có dữ liệu thật — cố ý cùng 1 thông báo,
+// không phân biệt, tránh lộ qua UI việc shareCode có từng tồn tại hay không.
+function NotFoundBill() {
+  const { t } = useTranslation('common')
+  return (
+    <Centered>
+      <p style={{ color: colors.danger, marginBottom: 8 }}>{t('bill.not_found')}</p>
+      <p style={{ color: colors.textSecondary, fontSize: 14 }}>{t('bill.not_found_hint')}</p>
+    </Centered>
+  )
+}
+
 // Panel "hoá đơn" bên trái — bản đọc (read-only), khớp bố cục sabi-ui-prototype-v8.html
 // (.receipt): QR trỏ thẳng vào URL bill thật vì lúc này bill đã tồn tại on-chain,
 // khác với ReceiptPreview ở trang tạo bill (lúc đó chưa có billId thật).
@@ -694,6 +734,7 @@ function ReceiptCard({
   contributions,
   slotNames,
   profiles,
+  billUrl,
 }: {
   billId: bigint
   billTitle: string | null
@@ -710,19 +751,20 @@ function ReceiptCard({
   contributions: Contribution[]
   slotNames: Record<string, string>
   profiles: Record<string, UserFirestoreData>
+  billUrl: string
 }) {
   const { t } = useTranslation('common')
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    QRCode.toDataURL(`${window.location.origin}/bill/${billId.toString()}`, {
+    QRCode.toDataURL(billUrl, {
       width: 118,
       margin: 1,
       color: { dark: '#1B1926', light: '#FFFFFF' },
     })
       .then(setQrDataUrl)
       .catch(() => {})
-  }, [billId])
+  }, [billUrl])
 
   // OPEN_SLOT: hiện đúng từng người đã góp (tên/địa chỉ + số tiền thật), slot
   // còn trống thì hiện dòng "—" gạch ngang — giống hệt hoá đơn ở trang tạo bill,

@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "sync-firestore": "node scripts/sync-firestore.mjs"
+    "sync-firestore": "node scripts/sync-firestore.mjs",
+    "backfill-sharecodes": "node scripts/backfill-sharecodes.mjs"
   },
   "dependencies": {
     "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
@@ -14,6 +15,7 @@
     "@tanstack/react-query": "^5.55.3",
     "firebase": "^12.15.0",
     "i18next": "^26.3.5",
+    "nanoid": "^6.0.1",
     "next": "^16.2.4",
     "next-i18next": "15.4.3",
     "qrcode": "^1.5.4",
