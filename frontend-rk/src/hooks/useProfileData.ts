@@ -1,6 +1,30 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchBillsByOrganizer, fetchPaymentsByPayer, fetchShareCodesByBillIds } from '../lib/firebase'
+import type { PaymentDoc } from '../lib/firebase'
+
+// Lượt trả CHÍNH ví này vừa thực hiện, ghi tạm ở bill/[id].tsx (xem
+// recordMyPaymentLocal ở đó) — collection Firestore "payments" chỉ được
+// scripts/sync-firestore.mjs (Admin SDK) ghi, client không ghi thẳng được
+// (rule write:false). Đọc gộp thêm nguồn này để /profile của CHÍNH ví vừa
+// trả thấy ngay lượt vừa trả trên cùng trình duyệt, không đợi ai chạy tay
+// script. Chỉ có tác dụng cùng trình duyệt — thiết bị khác vẫn phải đợi script.
+export interface LocalPaymentEntry extends PaymentDoc {
+  // Thời điểm ghi localStorage (Date.now()) — CHỈ dùng để sort, không phải dữ
+  // liệu on-chain thật. blockNumber luôn = 0 cho tới khi sync-firestore.mjs
+  // chạy và gán block thật (xem recordMyPaymentLocal).
+  localWrittenAt: number
+}
+
+function getLocalPayments(address: string): LocalPaymentEntry[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(`sabi-my-payments-${address.toLowerCase()}`)
+    return raw ? (JSON.parse(raw) as LocalPaymentEntry[]) : []
+  } catch {
+    return []
+  }
+}
 
 export interface CreatedBill {
   billId: bigint
@@ -40,10 +64,16 @@ async function fetchProfileData(address: `0x${string}`) {
   const addressLower = address.toLowerCase()
   // Đọc thẳng từ Firestore (script scripts/sync-firestore.mjs đã đồng bộ sẵn
   // từ chain) thay vì tự quét event BillCreated/SharePaid/SlotFilled qua RPC.
-  const [firestoreBills, firestorePayments] = await Promise.all([
+  const [firestoreBills, firestorePaymentsRaw] = await Promise.all([
     fetchBillsByOrganizer(addressLower),
     fetchPaymentsByPayer(addressLower),
   ])
+
+  // Gộp thêm lượt trả ghi tạm ở localStorage (xem getLocalPayments) — chỉ
+  // thêm lượt CHƯA có trong Firestore (script chưa kịp chạy), dedupe theo txHash.
+  const knownTxHashes = new Set(firestorePaymentsRaw.map((p) => p.txHash.toLowerCase()))
+  const localPayments = getLocalPayments(addressLower).filter((p) => !knownTxHashes.has(p.txHash.toLowerCase()))
+  const firestorePayments: (PaymentDoc & { localWrittenAt?: number })[] = [...firestorePaymentsRaw, ...localPayments]
 
   // Sort mới nhất trước theo blockNumber.
   const byBlockDesc = (a: { blockNumber: bigint }, b: { blockNumber: bigint }) =>
@@ -79,7 +109,22 @@ async function fetchProfileData(address: `0x${string}`) {
   )
   const extraShareCodes = missingBillIds.length > 0 ? await fetchShareCodesByBillIds(missingBillIds) : {}
 
-  const payments: PaymentMade[] = firestorePayments
+  // Lượt trả blockNumber = 0 nghĩa là CHỈ có trong localStorage (xem
+  // getLocalPayments), sync-firestore.mjs chưa kịp gán block thật — luôn coi
+  // là MỚI NHẤT (vừa xảy ra ngay phiên này), sort với nhau theo localWrittenAt;
+  // ngược lại (đã có block thật) sort như cũ theo byBlockDesc. Sort TRƯỚC khi
+  // map sang PaymentMade vì localWrittenAt không có trong PaymentMade.
+  const byPaymentRecency = (a: PaymentDoc & { localWrittenAt?: number }, b: PaymentDoc & { localWrittenAt?: number }) => {
+    const aPending = a.blockNumber === 0
+    const bPending = b.blockNumber === 0
+    if (aPending && bPending) return (b.localWrittenAt ?? 0) - (a.localWrittenAt ?? 0)
+    if (aPending) return -1
+    if (bPending) return 1
+    return byBlockDesc({ blockNumber: BigInt(a.blockNumber) }, { blockNumber: BigInt(b.blockNumber) })
+  }
+
+  const payments: PaymentMade[] = [...firestorePayments]
+    .sort(byPaymentRecency)
     .map((p) => ({
       billId: BigInt(p.billId),
       amount: BigInt(p.amount),
@@ -87,7 +132,6 @@ async function fetchProfileData(address: `0x${string}`) {
       blockNumber: BigInt(p.blockNumber),
       shareCode: knownShareCodes.get(p.billId) ?? extraShareCodes[p.billId],
     }))
-    .sort(byBlockDesc)
 
   const totalContributed = payments.reduce((sum, p) => sum + p.amount, 0n)
 

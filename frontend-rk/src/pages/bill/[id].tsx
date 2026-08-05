@@ -23,7 +23,7 @@ import { SourceChain } from '../../hooks/useBurnCrossChain'
 import { colors, radius } from '../../styles/theme'
 import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
-import type { UserFirestoreData, BillContributionDoc, BillShareDoc, BillFirestoreData } from '../../lib/firebase'
+import type { UserFirestoreData, BillContributionDoc, BillShareDoc, BillFirestoreData, PaymentDoc } from '../../lib/firebase'
 import { resolveShareCode } from '../../lib/firebase'
 import { scanEventLogs, withRetry429 } from '../../lib/eventScan'
 import { useCircleWallet, useCircleContractCall } from '../../contexts/CircleWalletContext'
@@ -132,6 +132,7 @@ const BillDetail: NextPage = () => {
     setOnchainBill(null)
     setBillLoaded(false)
     setScannedContributions([])
+    setScannedSharePayments([])
   }, [billId])
 
   // Optimistic overlay — áp ngay khi CHÍNH PHIÊN NÀY vừa trả xong (trực tiếp
@@ -145,6 +146,15 @@ const BillDetail: NextPage = () => {
   // cho matchedSlotsCount). Set qua scanContributions() khai báo bên dưới.
   const [scannedContributions, setScannedContributions] = useState<Contribution[]>([])
 
+  // Ai đã trả share nào (mode ASSIGNED) đọc TRỰC TIẾP từ event SharePaid
+  // on-chain — cùng root cause/cùng fix với scannedContributions ở trên:
+  // onchainBill.shares[].paid/payer chỉ được ghi bởi sync-firestore.mjs (chạy
+  // tay), nên đứng yên "chưa thanh toán" cho tới lần chạy script kế tiếp dù
+  // tx đã confirm on-chain. getShare(billId, shareId) không trả về payer (xem
+  // ABI — Share struct chỉ có amount/paid), nên phải quét event, không đọc
+  // trực tiếp qua contract call như matchedSlotsCount.
+  const [scannedSharePayments, setScannedSharePayments] = useState<{ shareId: number; payer: `0x${string}`; txHash: `0x${string}` }[]>([])
+
   // Tên tự đặt cho từng địa chỉ ví (dữ liệu cũ, trước khi có avatar/tên hồ sơ) —
   // lưu local theo billId, key là address viết thường. Vẫn giữ đọc để không mất
   // tên đã lưu từ trước, nhưng không còn ghi thêm (xem `profiles` bên dưới).
@@ -154,9 +164,45 @@ const BillDetail: NextPage = () => {
   // Firestore theo địa chỉ payer thật (không cần ai gõ tên tay nữa).
   const [profiles, setProfiles] = useState<Record<string, UserFirestoreData>>({})
 
+  // profile.tsx (Hồ sơ của CHÍNH ví vừa trả) đọc collection Firestore riêng
+  // "payments" — nhưng collection đó CHỈ được scripts/sync-firestore.mjs
+  // (Admin SDK) ghi, rule Firestore chặn client ghi thẳng (payments/{id}:
+  // allow write: if false, xem firebase.ts). Ghi tạm vào localStorage theo
+  // địa chỉ ví để CHÍNH trình duyệt này tự thấy ngay lượt vừa trả trên
+  // /profile, không đợi ai chạy tay script — useProfileData.ts đọc gộp thêm
+  // nguồn này (chỉ có tác dụng trên cùng trình duyệt, KHÔNG đồng bộ sang
+  // thiết bị khác cho tới khi script chạy — chấp nhận được, đây chỉ là lớp
+  // hiển thị tạm, dữ liệu thật vẫn luôn là on-chain).
+  const recordMyPaymentLocal = (amount: string, txHash: `0x${string}`, shareId: number | null) => {
+    if (!effectiveAddress || billId === undefined) return
+    const key = `sabi-my-payments-${effectiveAddress.toLowerCase()}`
+    try {
+      const existing: (PaymentDoc & { localWrittenAt: number })[] = JSON.parse(localStorage.getItem(key) ?? '[]')
+      if (existing.some((p) => p.txHash.toLowerCase() === txHash.toLowerCase())) return
+      // localWrittenAt: dùng để useProfileData.ts sort đúng "mới trả lên đầu"
+      // — blockNumber luôn = 0 ở đây (chưa có block thật), không dùng để sort được.
+      const entry: PaymentDoc & { localWrittenAt: number } = {
+        billId: billId.toString(),
+        shareId,
+        payer: effectiveAddress.toLowerCase(),
+        amount,
+        matched: shareId === null ? true : null,
+        txHash,
+        blockNumber: 0,
+        localWrittenAt: Date.now(),
+      }
+      // Giữ tối đa 50 lượt gần nhất/ví — đủ cho demo, tránh phình localStorage vô hạn
+      localStorage.setItem(key, JSON.stringify([...existing, entry].slice(-50)))
+    } catch {
+      // localStorage hỏng/đầy — bỏ qua, không chặn luồng thanh toán chính
+    }
+  }
+
   const recordOptimisticSharePaid = (shareId: number, txHash: `0x${string}`) => {
     if (!effectiveAddress) return
     setOptimisticShares((prev) => ({ ...prev, [shareId]: { payer: effectiveAddress.toLowerCase(), txHash } }))
+    const shareAmount = shares.find((s) => s.shareId === shareId)?.amount ?? '0'
+    recordMyPaymentLocal(shareAmount, txHash, shareId)
   }
   const recordOptimisticContribution = (amount: bigint, txHash: `0x${string}`) => {
     if (!effectiveAddress) return
@@ -164,6 +210,7 @@ const BillDetail: NextPage = () => {
       if (prev.some((c) => c.txHash.toLowerCase() === txHash.toLowerCase())) return prev
       return [...prev, { payer: effectiveAddress.toLowerCase(), amount: amount.toString(), matched: true, txHash, blockNumber: 0 }]
     })
+    recordMyPaymentLocal(amount.toString(), txHash, null)
   }
 
   // ─── Firebase Firestore realtime sync ─────────────────────────────────────
@@ -204,10 +251,14 @@ const BillDetail: NextPage = () => {
 
   const shareCount = onchainBill?.shares?.length ?? 0
 
-  // shares = dữ liệu Firestore ghép optimistic overlay (mode ASSIGNED — chưa
-  // đổi, xem note cuối task). contributions (OPEN_SLOT) = scan event on-chain
-  // thật (scannedContributions) ghép optimistic overlay của phiên này.
+  // shares: shareId/amount (cấu trúc tĩnh, không đổi sau khi tạo bill) vẫn lấy
+  // từ Firestore — nhưng paid/payer/txHash ưu tiên đọc từ scannedSharePayments
+  // (event SharePaid on-chain thật) trước, optimisticShares (phiên này, trước
+  // khi lượt quét kế tiếp kịp thấy) chỉ dùng khi on-chain CHƯA thấy — cùng
+  // pattern với contributions (OPEN_SLOT) ngay dưới.
   const shares: BillShareDoc[] = (onchainBill?.shares ?? []).map((s) => {
+    const paidLog = scannedSharePayments.find((p) => p.shareId === s.shareId)
+    if (paidLog) return { ...s, paid: true, payer: paidLog.payer, txHash: paidLog.txHash }
     const o = optimisticShares[s.shareId]
     return o ? { ...s, paid: true, payer: o.payer, txHash: o.txHash } : s
   })
@@ -407,6 +458,45 @@ const BillDetail: NextPage = () => {
     return () => clearInterval(interval)
   }, [scanContributions])
 
+  // ─── shares đã trả (mode ASSIGNED) đọc TRỰC TIẾP từ event SharePaid —
+  // cùng cơ chế minFromBlock/?cb= với scanContributions ở trên, xem comment
+  // ở khai báo scannedSharePayments.
+  const scanSharePayments = useCallback(async () => {
+    if (!publicClient || billId === undefined) return
+    try {
+      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
+      const rawCbFromUrl = typeof router.query.cb === 'string' ? router.query.cb : undefined
+      const rawCreatedBlock = localStorage.getItem(`sabi-bill-${billId.toString()}-createdBlock`)
+      const candidate =
+        rawCbFromUrl && /^\d+$/.test(rawCbFromUrl)
+          ? BigInt(rawCbFromUrl)
+          : rawCreatedBlock
+          ? BigInt(rawCreatedBlock)
+          : undefined
+      const minFromBlock =
+        candidate !== undefined && candidate >= SABI_BILL_DEPLOY_BLOCK && candidate <= latestBlock
+          ? candidate
+          : undefined
+
+      const logs = await scanEventLogs(publicClient, 'SharePaid', { billId }, latestBlock, `sabi-scan-SharePaid-${billId}`, minFromBlock)
+      setScannedSharePayments(
+        logs.map((log: any) => ({
+          shareId: Number(log.args.shareId as bigint),
+          payer: log.args.payer as `0x${string}`,
+          txHash: log.transactionHash as `0x${string}`,
+        }))
+      )
+    } catch {
+      // 1 lần quét lỗi — giữ nguyên danh sách cũ, poll 15s bên dưới tự thử lại
+    }
+  }, [publicClient, billId, router.query.cb])
+
+  useEffect(() => {
+    scanSharePayments()
+    const interval = setInterval(scanSharePayments, 15_000)
+    return () => clearInterval(interval)
+  }, [scanSharePayments])
+
   const { writeContract: approve, data: approveTx, isPending: isApproving, error: approveError, reset: resetApprove } = useWriteContract()
   // chainId cố định Arc — không mặc định theo chain ví đang báo cáo, vì có thể
   // chưa cập nhật đúng (vd vừa trả cross-chain xong, ví còn ở chain nguồn) →
@@ -495,14 +585,14 @@ const BillDetail: NextPage = () => {
 
 
   const { writeContract: payShare, data: payShareTx, isPending: isPayingShare, error: payShareError, reset: resetPayShare } = useWriteContract()
-  const { isLoading: isConfirmingShare, isSuccess: isShareConfirmed } = useWaitForTransactionReceipt({
+  const { isLoading: isConfirmingShare, isSuccess: isShareConfirmed, error: shareConfirmError } = useWaitForTransactionReceipt({
     hash: payShareTx,
     chainId: arcTestnet.id,
   })
 
   // ─── Ghi: trả tiền vào slot (mode OPEN_SLOT) ──────────────────────────────
   const { writeContract: paySlot, data: paySlotTx, isPending: isPayingSlot, error: paySlotError, reset: resetPaySlot } = useWriteContract()
-  const { isLoading: isConfirmingSlot, isSuccess: isSlotConfirmed } = useWaitForTransactionReceipt({
+  const { isLoading: isConfirmingSlot, isSuccess: isSlotConfirmed, error: slotConfirmError } = useWaitForTransactionReceipt({
     hash: paySlotTx,
     chainId: arcTestnet.id,
   })
@@ -512,12 +602,17 @@ const BillDetail: NextPage = () => {
   const mergedIsPayingShare = isCircleActive ? circlePayShare.isPending : isPayingShare || isConfirmingShare
   const mergedPayShareTx = isCircleActive ? circlePayShare.txHash : payShareTx
   const mergedShareConfirmed = isCircleActive ? circlePayShare.isSuccess : isShareConfirmed
-  const mergedPayShareError = isCircleActive ? circlePayShare.error : payShareError
+  // payShareError chỉ bắt lỗi lúc GỬI (user reject/revert-lúc-estimate) — nếu
+  // tx đã gửi thành công (có hash) nhưng REVERT lúc chờ confirm, lỗi đó nằm ở
+  // shareConfirmError (useWaitForTransactionReceipt), không phải payShareError.
+  // Thiếu nhánh này khiến phase kẹt mãi ở 'confirming' (payTxHash vẫn còn),
+  // không bao giờ chuyển 'error' → modal không có nút Đóng, phải F5.
+  const mergedPayShareError = isCircleActive ? circlePayShare.error : payShareError ?? shareConfirmError
 
   const mergedIsPayingSlot = isCircleActive ? circlePaySlot.isPending : isPayingSlot || isConfirmingSlot
   const mergedPaySlotTx = isCircleActive ? circlePaySlot.txHash : paySlotTx
   const mergedSlotConfirmed = isCircleActive ? circlePaySlot.isSuccess : isSlotConfirmed
-  const mergedPaySlotError = isCircleActive ? circlePaySlot.error : paySlotError
+  const mergedPaySlotError = isCircleActive ? circlePaySlot.error : paySlotError ?? slotConfirmError
 
   // Trả trực tiếp xong → ghi ngay vào optimistic state (không đợi script
   // sync-firestore chạy lại mới thấy cập nhật, xem recordOptimisticContribution).
@@ -540,10 +635,13 @@ const BillDetail: NextPage = () => {
   }, [mergedSlotConfirmed, scanContributions])
 
   // Trả trực tiếp 1 share xong → ghi ngay optimistic (payer = ví đang trả) để
-  // hoá đơn hiện đúng địa chỉ thay vì "Phần #n" mãi mãi.
+  // hoá đơn hiện đúng địa chỉ thay vì "Phần #n" mãi mãi, đồng thời quét lại
+  // SharePaid ngay từ on-chain (giống scanContributions) — không đợi 15s hay
+  // chạy tay sync-firestore mới thấy "đã thanh toán".
   useEffect(() => {
     if (!mergedShareConfirmed || payingShareId === null || !mergedPayShareTx) return
     recordOptimisticSharePaid(payingShareId, mergedPayShareTx)
+    scanSharePayments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mergedShareConfirmed, mergedPayShareTx])
 
