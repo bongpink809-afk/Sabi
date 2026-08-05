@@ -1,7 +1,10 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useReadContracts } from 'wagmi'
 import { fetchBillsByOrganizer, fetchPaymentsByPayer, fetchShareCodesByBillIds } from '../lib/firebase'
 import type { PaymentDoc } from '../lib/firebase'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI } from '../lib/contracts'
+import { arcTestnet } from '../wagmi'
 
 // Lượt trả CHÍNH ví này vừa thực hiện, ghi tạm ở bill/[id].tsx (xem
 // recordMyPaymentLocal ở đó) — collection Firestore "payments" chỉ được
@@ -163,19 +166,88 @@ export interface BillProgress {
   totalCount: number
 }
 
-// Badge "ĐANG THU"/"ĐÃ ĐỦ" ở Hồ sơ — derive thuần từ CreatedBill (đã có sẵn
-// numSlots/matchedSlotsCount/shareCount/paidShareCount từ Firestore), không
-// còn cần đọc chain (trước đây tự multicall getBill+shareCount riêng).
-export function useBillsProgress(bills: CreatedBill[]): Record<string, BillProgress> {
-  return useMemo(() => {
-    const result: Record<string, BillProgress> = {}
+// Badge "ĐANG THU"/"ĐÃ ĐỦ" ở Hồ sơ — đọc TRỰC TIẾP từ chain qua Multicall3
+// (batch 1 request cho đúng các bill đang hiện TRÊN TRANG NÀY, xem
+// wagmi.ts:16-25 vì sao Multicall3 bắt buộc phải khai báo ở chain config).
+//
+// Trước đây tính thuần từ CreatedBill (matchedSlotsCount/paidShareCount) —
+// 2 field này lấy từ Firestore, chỉ được scripts/sync-firestore.mjs (chạy
+// tay) cập nhật, y hệt root cause đã fix ở bill/[id].tsx đêm 05/08/2026 (xem
+// memory project-sabi-production-bugfixes-05082026): bill đã trả đủ trên
+// chain vẫn hiện "0/4 COLLECTING" cho tới khi ai chạy tay script.
+//
+// matchedSlotsCount trên contract CHỈ được increment trong paySlot() (xem
+// src/bill.sol dòng ~173/242) — payShare() (mode ASSIGNED) không đụng field
+// này, luôn = 0 cho bill ASSIGNED. Vậy: OPEN_SLOT (mode 1) đọc thẳng
+// getBill() lấy matchedSlotsCount/numSlots; ASSIGNED (mode 0) phải đọc từng
+// getShare(billId, shareId) rồi tự đếm paid === true — shareCount (số phần
+// tử) dùng luôn giá trị đã biết từ Firestore (CreatedBill.shareCount =
+// shares.length, KHÔNG đổi sau khi tạo bill nên không cần đọc lại on-chain),
+// chỉ cần gọi getShare cho từng shareId.
+export function useBillsProgress(bills: CreatedBill[]): { progress: Record<string, BillProgress>; isLoading: boolean } {
+  const { contracts, meta } = useMemo(() => {
+    const contractCalls: {
+      address: `0x${string}`
+      abi: typeof SABI_BILL_ABI
+      functionName: string
+      args: readonly bigint[]
+      // Bắt buộc set rõ per-entry (KHÔNG để mặc định theo chain ví đang connect)
+      // — user có thể đang connect Base/Arbitrum Sepolia (trả cross-chain)
+      // trong khi bill hiện trên Profile luôn nằm trên Arc. wagmi/viem chuẩn
+      // hoá contracts thành đúng dạng { chainId, functionName, args, address }[]
+      // này nội bộ (xem readContractsQueryKey trong @wagmi/core), nên set trực
+      // tiếp ở đây là đúng cơ chế thật, không phải đoán.
+      chainId: number
+    }[] = []
+    const metaList: { billId: string; kind: 'bill' | 'share' }[] = []
     for (const b of bills) {
-      const key = b.billId.toString()
-      result[key] =
-        b.mode === 0
-          ? { paidCount: b.paidShareCount, totalCount: b.shareCount }
-          : { paidCount: b.matchedSlotsCount, totalCount: b.numSlots }
+      if (b.mode === 1) {
+        contractCalls.push({ address: SABI_BILL_ADDRESS, abi: SABI_BILL_ABI, functionName: 'getBill', args: [b.billId], chainId: arcTestnet.id })
+        metaList.push({ billId: b.billId.toString(), kind: 'bill' })
+      } else {
+        for (let shareId = 0; shareId < b.shareCount; shareId++) {
+          contractCalls.push({ address: SABI_BILL_ADDRESS, abi: SABI_BILL_ABI, functionName: 'getShare', args: [b.billId, BigInt(shareId)], chainId: arcTestnet.id })
+          metaList.push({ billId: b.billId.toString(), kind: 'share' })
+        }
+      }
     }
-    return result
+    return { contracts: contractCalls, meta: metaList }
   }, [bills])
+
+  const { data, isLoading } = useReadContracts({
+    // contracts trộn 2 functionName khác nhau (getBill/getShare) trong 1 mảng —
+    // wagmi suy luận type dựa trên literal tuple, mảng build động ở trên
+    // không giữ được literal đó (widen thành string) nên ép kiểu tay; entry.result
+    // được cast lại đúng shape thật ở dưới (dựa theo ABI, xem SabiBillABI.ts).
+    contracts: contracts as any,
+    allowFailure: true,
+    query: {
+      enabled: contracts.length > 0,
+      refetchInterval: 25_000,
+      // KHÔNG giữ data của bộ contracts TRƯỚC (trang cũ) trong lúc bộ MỚI
+      // (trang mới) đang tải — tránh hiện số trang cũ rồi nhảy sang số đúng,
+      // đúng loại bug keepPreviousData đã gặp ở matchedSlotsCount đêm trước.
+      placeholderData: undefined,
+    },
+  })
+
+  const progress = useMemo(() => {
+    const result: Record<string, BillProgress> = {}
+    if (!data) return result
+    data.forEach((entry, i) => {
+      const m = meta[i]
+      if (!m || entry.status !== 'success') return
+      if (m.kind === 'bill') {
+        const bill = entry.result as { matchedSlotsCount: bigint; numSlots: bigint }
+        result[m.billId] = { paidCount: Number(bill.matchedSlotsCount), totalCount: Number(bill.numSlots) }
+      } else {
+        const share = entry.result as { paid: boolean }
+        const prev = result[m.billId] ?? { paidCount: 0, totalCount: 0 }
+        result[m.billId] = { paidCount: prev.paidCount + (share.paid ? 1 : 0), totalCount: prev.totalCount + 1 }
+      }
+    })
+    return result
+  }, [data, meta])
+
+  return { progress, isLoading: contracts.length > 0 && isLoading }
 }

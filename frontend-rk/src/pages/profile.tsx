@@ -159,8 +159,11 @@ const Profile: NextPage = () => {
   const visiblePaid = paymentsMade.slice(currentPaidPage * PAGE_SIZE, currentPaidPage * PAGE_SIZE + PAGE_SIZE)
 
   // Badge "ĐANG THU"/"ĐÃ ĐỦ" — chỉ tính cho các bill đang hiện (multicall 1 lần,
-  // không tính hết toàn bộ billsCreated để tránh phình request khi list dài)
-  const billsProgress = useBillsProgress(visibleCreated)
+  // không tính hết toàn bộ billsCreated để tránh phình request khi list dài).
+  // Đọc thẳng chain (xem useBillsProgress) nên có isLoading riêng — CreatedBillRow
+  // phải hiện skeleton trong lúc chờ, KHÔNG hiện số Firestore cũ rồi nhảy sang
+  // số đúng (đổi trang cũng phải reset về loading ngay, không giữ số trang cũ).
+  const { progress: billsProgress, isLoading: progressLoading } = useBillsProgress(visibleCreated)
 
   return (
     <div style={wrap}>
@@ -442,7 +445,13 @@ const Profile: NextPage = () => {
                 <Section title={t('profile.section_created_title')} sub={t('profile.section_created_sub')}>
                   {!isLoading && !isError && billsCreated.length === 0 && <EmptyRow text={t('profile.empty_created')} />}
                   {visibleCreated.map((bill) => (
-                    <CreatedBillRow key={bill.txHash} bill={bill} progress={billsProgress[bill.billId.toString()]} titleMap={firestoreBillTitles} />
+                    <CreatedBillRow
+                      key={bill.txHash}
+                      bill={bill}
+                      progress={billsProgress[bill.billId.toString()]}
+                      progressLoading={progressLoading}
+                      titleMap={firestoreBillTitles}
+                    />
                   ))}
                   {totalCreatedPages > 1 && (
                     <Pagination page={currentCreatedPage} totalPages={totalCreatedPages} onChange={setCreatedPage} />
@@ -562,7 +571,20 @@ function ModeBadge({ mode }: { mode: number }) {
   )
 }
 
-function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progress: BillProgress | undefined; titleMap: Record<string, string> }) {
+function CreatedBillRow({
+  bill,
+  progress,
+  progressLoading,
+  titleMap,
+}: {
+  bill: CreatedBill
+  progress: BillProgress | undefined
+  // true trong lúc useBillsProgress đang gọi multicall cho TRANG hiện tại —
+  // phải hiện skeleton "..." thay vì để trống/hiện số cũ, tránh cảm giác
+  // "nháy số sai rồi mới đúng" khi progress đổi từ undefined sang giá trị thật.
+  progressLoading: boolean
+  titleMap: Record<string, string>
+}) {
   const router = useRouter()
   const { t } = useTranslation('common')
   // Route billId số đã khoá — chỉ shareCode mới link được. Không nên xảy ra
@@ -590,25 +612,29 @@ function CreatedBillRow({ bill, progress, titleMap }: { bill: CreatedBill; progr
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
         <ModeBadge mode={bill.mode} />
-        {progress !== undefined && (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              padding: '3px 8px',
-              borderRadius: 6,
-              whiteSpace: 'nowrap',
-              background: isDone ? colors.successBg : colors.warningBg,
-              color: isDone ? colors.success : colors.warning,
-            }}
-          >
-            {isDone ? t('profile.badge_done') : t('profile.badge_collecting')}
-          </span>
+        {progressLoading ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, padding: '3px 8px', color: colors.textMuted }}>···</span>
+        ) : (
+          progress !== undefined && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                padding: '3px 8px',
+                borderRadius: 6,
+                whiteSpace: 'nowrap',
+                background: isDone ? colors.successBg : colors.warningBg,
+                color: isDone ? colors.success : colors.warning,
+              }}
+            >
+              {isDone ? t('profile.badge_done') : t('profile.badge_collecting')}
+            </span>
+          )
         )}
       </div>
       <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>
-        {progress ? `${progress.paidCount}/${progress.totalCount} ${t('profile.paid_suffix')} · ` : ''}
+        {progressLoading ? '···' : progress ? `${progress.paidCount}/${progress.totalCount} ${t('profile.paid_suffix')} · ` : ''}
         {formatUnits(bill.totalAmount, 6)} USDC
       </div>
     </>
