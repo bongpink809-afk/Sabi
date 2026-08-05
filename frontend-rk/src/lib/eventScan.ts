@@ -157,10 +157,9 @@ export async function scanEventLogs(
   console.time(`[profile-perf] ${cacheKey} chunks`)
   const chunkResults = await Promise.all(
     ranges.map(({ fromBlock, toBlock }) =>
-      // Throttle giờ nằm ở tầng transport (wagmi.ts, arcThrottledFetch) — bọc
-      // withGlobalConcurrency thêm ở đây sẽ chiếm 2 slot/lệnh (1 slot ngoài này +
-      // 1 slot khi fetch thật sự bắn ở tầng transport), làm chậm gấp đôi không
-      // cần thiết mà không tăng an toàn gì thêm.
+      // Rate-limit request thật ra RPC giờ nằm trong pages/api/rpc-arc.ts
+      // (server-side, xem wagmi.ts) — không cần tự bọc thêm rate-limit riêng
+      // ở đây, chỉ làm chậm gấp đôi không cần thiết mà không tăng an toàn gì thêm.
       withRetry429(() =>
         publicClient.getContractEvents({
           address: SABI_BILL_ADDRESS,

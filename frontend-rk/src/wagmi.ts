@@ -2,7 +2,6 @@ import { baseSepolia, arbitrumSepolia, sepolia } from 'wagmi/chains'
 import { getDefaultConfig } from '@rainbow-me/rainbowkit'
 import { defineChain } from 'viem'
 import { http } from 'viem'
-import { withGlobalConcurrency } from './lib/concurrency'
 
 export const arcTestnet = defineChain({
   id: 5042002,
@@ -27,23 +26,28 @@ export const arcTestnet = defineChain({
   testnet: true,
 })
 
-// fetch riêng cho Arc Testnet — mọi request VẬT LÝ tới RPC này (kể cả từ
-// useReadContract/useReadContracts của wagmi, không chỉ scanEventLogs) đều
-// xếp hàng qua đúng 1 rate-limiter đã verify an toàn (2 request/400ms, xem
-// concurrency.ts). Trước đây chỉ scanEventLogs tự bọc withGlobalConcurrency ở
-// từng lệnh gọi — các hook đọc contract state qua Multicall3 (getBill,
-// shareCount, getShare, allowance...) chạy hoàn toàn tự do song song, cộng dồn
-// với phần quét log khiến tổng số request đồng thời vượt xa mức RPC public
-// chịu được. Đặt ở tầng transport là nơi DUY NHẤT chắc chắn bắt được MỌI
-// nguồn gọi RPC, không phụ thuộc việc từng chỗ gọi có nhớ tự bọc hay không.
-const arcThrottledFetch: typeof fetch = (input, init) => withGlobalConcurrency(() => fetch(input, init))
-
 export const config = getDefaultConfig({
   appName: 'Sabi',
   projectId: '0599aca09205f1c97acf0fb11b2cc645',
   chains: [arcTestnet, baseSepolia, arbitrumSepolia, sepolia],
   transports: {
-    [arcTestnet.id]: http(undefined, { fetchFn: arcThrottledFetch }),
+    // Gọi qua /api/rpc-arc (proxy server, xem pages/api/rpc-arc.ts) thay vì
+    // thẳng rpc.testnet.arc.network — RPC này không trả header CORS ở bước
+    // preflight nên trình duyệt luôn bị chặn (đã verify bằng Network tab thật:
+    // "blocked by CORS policy"), không phải lỗi thoáng qua nên retry phía
+    // client không cứu được. Rate-limit + retry-cap cho lượt gọi thật ra
+    // ngoài RPC giờ nằm trong chính route đó (server-side, không còn ở tầng
+    // transport client này nữa — xem comment trong rpc-arc.ts lý do).
+    //
+    // timeout: 30_000 — viem mặc định chỉ chờ 10s/request (xem
+    // utils/rpc/http.ts). Circuit breaker trong rpc-arc.ts có thể tự retry
+    // tối đa 5 lần, backoff cộng dồn ~22s khi RPC thật quá tải — nếu client
+    // bỏ cuộc sau 10s trong lúc proxy vẫn đang retry (chưa kịp trả lời),
+    // viem throw TimeoutError, và waitForTransactionReceipt coi lỗi này khác
+    // "chưa tìm thấy tx" nên reject NGAY, dừng poll hẳn dù tx đã confirm thật
+    // trên chain — đúng nguyên nhân nút Approve/Pay kẹt "Processing" vĩnh
+    // viễn. Timeout ở đây phải lớn hơn worst-case của chính proxy.
+    [arcTestnet.id]: http('/api/rpc-arc', { timeout: 30_000 }),
     [baseSepolia.id]: http('https://base-sepolia.g.alchemy.com/v2/ZTszNH9ETuYNUXzah7wfX'),
     [arbitrumSepolia.id]: http('https://arb-sepolia.g.alchemy.com/v2/gDAnPNo16g_MPXWCSBYGQ'),
     [sepolia.id]: http('https://eth-sepolia.g.alchemy.com/v2/ZTszNH9ETuYNUXzah7wfX'),

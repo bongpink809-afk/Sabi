@@ -672,10 +672,10 @@ function PaymentRow({ payment, titleMap }: { payment: PaymentMade; titleMap: Rec
   const { data: method } = useQuery({
     queryKey: ['paymentMethod', payment.txHash],
     queryFn: async () => {
-      // withRetry429: retry app-level cho blip mạng/429 thoáng qua — throttle
-      // concurrency giờ nằm ở tầng transport (wagmi.ts, arcThrottledFetch), áp
-      // dụng tự động cho MỌI lệnh RPC Arc kể cả lệnh này, không cần tự bọc
-      // withGlobalConcurrency riêng ở đây nữa.
+      // withRetry429: retry app-level cho blip mạng/429 thoáng qua — rate-limit
+      // request thật ra RPC giờ nằm trong pages/api/rpc-arc.ts (server-side),
+      // áp dụng tự động cho MỌI lệnh RPC Arc kể cả lệnh này, không cần tự bọc
+      // thêm rate-limit riêng ở đây nữa.
       const tx = await withRetry429(() => publicClient!.getTransaction({ hash: payment.txHash }))
       return tx.input.toLowerCase().startsWith(PAY_CROSSCHAIN_SELECTOR) ? 'crosschain' : 'direct'
     },
