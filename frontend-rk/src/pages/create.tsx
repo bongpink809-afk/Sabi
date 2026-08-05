@@ -92,6 +92,14 @@ const Home: NextPage = () => {
           const newBillId = logs[0].args.billId as bigint
           const billIdStr = newBillId.toString()
 
+          // Lưu block lúc bill này được tạo — dùng làm floor quét event
+          // SlotFilled/SharePaid ở bill/[id].tsx thay vì seed.cutoffBlock cố
+          // định, vì event của bill này chắc chắn không thể xảy ra trước lúc
+          // tạo. Seed thường bị stale (không re-run định kỳ) nên khoảng
+          // cutoffBlock→now có thể rất lớn — bill mới tạo sẽ phải quét lại
+          // nguyên đoạn đó nếu không có floor riêng này.
+          localStorage.setItem(`sabi-bill-${billIdStr}-createdBlock`, receipt.blockNumber.toString())
+
           // shareCode ngẫu nhiên dùng làm URL chia sẻ công khai — thay billId
           // số tuần tự (chống dò link qua app, xem firebase.ts). Sinh + lưu
           // TRƯỚC khi push route, để trang đích resolve được ngay lần load đầu.

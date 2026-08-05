@@ -123,13 +123,21 @@ export async function scanEventLogs(
   eventName: 'BillCreated' | 'SharePaid' | 'SlotFilled',
   args: Record<string, unknown> | undefined,
   latestBlock: bigint,
-  cacheKey: string
+  cacheKey: string,
+  // Floor tối thiểu do caller biết chắc (vd block lúc 1 bill cụ thể được tạo
+  // — event của bill đó không thể xảy ra trước đó). Chỉ áp dụng khi LỚN HƠN
+  // seedFloor mặc định — bill cũ (trước cutoff, đã có trong seed) không bị
+  // ảnh hưởng. Bill MỚI (sau cutoff) nhảy thẳng qua khoảng seed→creation vốn
+  // không thể có log của bill đó, tránh phải quét lại nguyên đoạn cutoff→now
+  // (có thể hàng trăm nghìn block, hàng chục chu kỳ MAX_CHUNKS mới đuổi kịp).
+  minFromBlock?: bigint
 ): Promise<any[]> {
   const seed = await loadSeed()
   const seedLogs = (seed?.logsByEvent[eventName] ?? []).filter((log) => matchesArgs(log, args))
   // Không có seed (lỗi mạng/chưa deploy file) — coi như "nền" bắt đầu ngay
   // trước block deploy, quét sẽ tự chảy từ đó lên (chậm hơn nhưng không sai).
-  const seedFloor = seed ? seed.cutoffBlock : SABI_BILL_DEPLOY_BLOCK - 1n
+  const baseSeedFloor = seed ? seed.cutoffBlock : SABI_BILL_DEPLOY_BLOCK - 1n
+  const seedFloor = minFromBlock !== undefined && minFromBlock > baseSeedFloor ? minFromBlock : baseSeedFloor
 
   // cached (nếu có) giờ CHỈ còn chứa phần log phát sinh SAU seedFloor — xem
   // logCache.ts. lastScannedBlock của nó luôn ≥ seedFloor một khi đã tồn tại

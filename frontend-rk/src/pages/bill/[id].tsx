@@ -1,14 +1,14 @@
 import { CrossChainState } from '../../hooks/useCrossChainPayment'
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, usePublicClient } from 'wagmi'
 import type { NextPage, GetServerSideProps } from 'next'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'next-i18next'
 import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
-import { formatUnits } from 'viem'
+import { formatUnits, maxUint256 } from 'viem'
 import { sepolia } from 'wagmi/chains'
-import { SABI_BILL_ADDRESS, SABI_BILL_ABI, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
+import { SABI_BILL_ADDRESS, SABI_BILL_ABI, SABI_BILL_DEPLOY_BLOCK, ARC_USDC_ADDRESS, ERC20_ABI, baseSepolia, arbitrumSepolia } from '../../lib/contracts'
 import { rpcRetryQueryOptions } from '../../lib/rpcRetry'
 import { CrossChainStatusPanel } from '../../components/CrossChainStatus'
 import { PaymentChainModal } from '../../components/PaymentChainModal'
@@ -25,6 +25,7 @@ import QRCode from 'qrcode'
 import { useBillSync, useProfilesSync, saveSingleShareName } from '../../hooks/useFirebaseSync'
 import type { UserFirestoreData, BillContributionDoc, BillShareDoc, BillFirestoreData } from '../../lib/firebase'
 import { resolveShareCode } from '../../lib/firebase'
+import { scanEventLogs, withRetry429 } from '../../lib/eventScan'
 import { useCircleWallet, useCircleContractCall } from '../../contexts/CircleWalletContext'
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => ({
@@ -89,7 +90,7 @@ const BillDetail: NextPage = () => {
   // tự động không lộ khác biệt qua UI giữa "số" và "shareCode sai".
   const shareCodeNotFound = rawId !== undefined && resolvedShareCodeBillId === null
 
-  const { address: connectedAddress } = useAccount()
+  const { address: connectedAddress, status: walletStatus } = useAccount()
   const { switchChainAsync } = useSwitchChain()
   const { chainId: currentChainId } = useAccount()
   const payMethod: PayMethod =
@@ -123,10 +124,26 @@ const BillDetail: NextPage = () => {
   const [onchainBill, setOnchainBill] = useState<BillFirestoreData | null>(null)
   const [billLoaded, setBillLoaded] = useState(false)
 
+  // Chuyển bill bằng soft-navigation (bấm link trong app, không F5) KHÔNG
+  // remount component (cùng route /bill/[id]) — nếu không reset, onchainBill
+  // còn nguyên data bill CŨ (title/shares/matchedSlotsCount...) cho tới khi
+  // Firestore trả snapshot đầu tiên của bill MỚI, gây lộ số liệu sai/lẫn bill.
+  useEffect(() => {
+    setOnchainBill(null)
+    setBillLoaded(false)
+    setScannedContributions([])
+  }, [billId])
+
   // Optimistic overlay — áp ngay khi CHÍNH PHIÊN NÀY vừa trả xong (trực tiếp
   // hoặc cross-chain), không đợi script sync-firestore chạy lại mới thấy cập nhật.
   const [optimisticContributions, setOptimisticContributions] = useState<BillContributionDoc[]>([])
   const [optimisticShares, setOptimisticShares] = useState<Record<number, { payer: string; txHash: `0x${string}` }>>({})
+
+  // Contributions (OPEN_SLOT) đọc TRỰC TIẾP từ event SlotFilled on-chain —
+  // KHÔNG qua Firestore (onchainBill.contributions chỉ được ghi bởi
+  // scripts/sync-firestore.mjs, chạy tay không cron — cùng root cause đã fix
+  // cho matchedSlotsCount). Set qua scanContributions() khai báo bên dưới.
+  const [scannedContributions, setScannedContributions] = useState<Contribution[]>([])
 
   // Tên tự đặt cho từng địa chỉ ví (dữ liệu cũ, trước khi có avatar/tên hồ sơ) —
   // lưu local theo billId, key là address viết thường. Vẫn giữ đọc để không mất
@@ -187,24 +204,20 @@ const BillDetail: NextPage = () => {
 
   const shareCount = onchainBill?.shares?.length ?? 0
 
-  // shares/contributions = dữ liệu Firestore ghép với optimistic overlay của phiên này
+  // shares = dữ liệu Firestore ghép optimistic overlay (mode ASSIGNED — chưa
+  // đổi, xem note cuối task). contributions (OPEN_SLOT) = scan event on-chain
+  // thật (scannedContributions) ghép optimistic overlay của phiên này.
   const shares: BillShareDoc[] = (onchainBill?.shares ?? []).map((s) => {
     const o = optimisticShares[s.shareId]
     return o ? { ...s, paid: true, payer: o.payer, txHash: o.txHash } : s
   })
 
   const contributions: Contribution[] = (() => {
-    const fromFirestore: Contribution[] = (onchainBill?.contributions ?? []).map((c) => ({
-      payer: c.payer as `0x${string}`,
-      amount: BigInt(c.amount),
-      matched: c.matched,
-      txHash: c.txHash as `0x${string}`,
-    }))
-    const knownHashes = new Set(fromFirestore.map((c) => c.txHash.toLowerCase()))
+    const knownHashes = new Set(scannedContributions.map((c) => c.txHash.toLowerCase()))
     const extra: Contribution[] = optimisticContributions
       .filter((c) => !knownHashes.has(c.txHash.toLowerCase()))
       .map((c) => ({ payer: c.payer as `0x${string}`, amount: BigInt(c.amount), matched: c.matched, txHash: c.txHash as `0x${string}` }))
-    return [...fromFirestore, ...extra]
+    return [...scannedContributions, ...extra]
   })()
 
   // Lấy hồ sơ (avatar + tên) của mọi địa chỉ ví đã trả bill này — cả OPEN_SLOT
@@ -307,6 +320,93 @@ const BillDetail: NextPage = () => {
     },
   })
 
+  // ─── matchedSlotsCount đọc TRỰC TIẾP từ contract, không qua Firestore ────
+  // onchainBill.matchedSlotsCount chỉ được cập nhật khi chạy tay
+  // `npm run sync-firestore` (xem comment đầu scripts/sync-firestore.mjs:
+  // "Chạy thủ công trước mỗi lần demo, không cron") — sau khi user thanh toán
+  // không có gì tự ghi lại Firestore, khiến "X/3 shares paid" đứng yên vô thời
+  // hạn kể cả F5. refetchInterval 15s để tự thấy người khác vừa trả trong lúc
+  // mình đang xem, không cần thao tác gì.
+  const { data: liveBill, refetch: refetchLiveBill } = useReadContract({
+    address: SABI_BILL_ADDRESS,
+    abi: SABI_BILL_ABI,
+    functionName: 'getBill',
+    args: billId !== undefined ? [billId] : undefined,
+    chainId: arcTestnet.id,
+    query: {
+      enabled: billId !== undefined,
+      refetchInterval: 15_000,
+      ...rpcRetryQueryOptions,
+    },
+  })
+
+  // ─── contributions (OPEN_SLOT) đọc TRỰC TIẾP từ event SlotFilled on-chain,
+  // KHÔNG qua Firestore — cùng root cause vừa fix cho matchedSlotsCount ở
+  // trên, cùng gốc "sync-firestore.mjs chạy tay, không cron". Tái dùng
+  // scanEventLogs đã có sẵn (đang phục vụ useLandingStats.ts) — billId là
+  // indexed param trong ABI (xem SabiBillABI.ts) nên lọc được ngay ở tầng RPC
+  // (getContractEvents args), không phải quét hết log rồi lọc tay. Cache key
+  // riêng theo bill (sabi-scan-SlotFilled-${billId}) qua logCache.ts, dedupe
+  // theo (transactionHash, logIndex) đã có sẵn trong scanEventLogs.
+  const publicClient = usePublicClient({ chainId: arcTestnet.id })
+
+  const scanContributions = useCallback(async () => {
+    if (!publicClient || billId === undefined) return
+    try {
+      const latestBlock = await withRetry429(() => publicClient.getBlockNumber())
+
+      // Floor riêng cho bill này — bill mới tạo sau seed.cutoffBlock nhảy
+      // thẳng qua đoạn seed→creation, không phải quét lại từ cutoffBlock (có
+      // thể rất xa nếu seed đã stale). Ưu tiên ?cb= trên URL (đi theo link
+      // share, NGƯỜI NHẬN link mở lần đầu cũng có — đây là luồng chính của
+      // Sabi) hơn localStorage (chỉ máy của creator có, dùng làm fallback phụ
+      // cho creator tự bookmark/quay lại). Không có cái nào → scanEventLogs
+      // tự fallback về seed.cutoffBlock như cũ, không lỗi/crash.
+      const rawCbFromUrl = typeof router.query.cb === 'string' ? router.query.cb : undefined
+      const rawCreatedBlock = localStorage.getItem(`sabi-bill-${billId.toString()}-createdBlock`)
+      const candidate =
+        rawCbFromUrl && /^\d+$/.test(rawCbFromUrl)
+          ? BigInt(rawCbFromUrl)
+          : rawCreatedBlock
+          ? BigInt(rawCreatedBlock)
+          : undefined
+
+      // cb trên URL là public, ai cũng sửa tay được trên thanh địa chỉ — chỉ
+      // chặn giá trị SAI RÕ RÀNG (âm, không phải số, hoặc vượt quá block hiện
+      // tại — không thể có thật). KHÔNG so khoảng cách với latestBlock: bill
+      // MỚI TẠO luôn có createdBlock rất gần latestBlock — đó là bản chất
+      // bình thường, không phải dấu hiệu bất thường (bug cũ: yêu cầu "phải
+      // cách xa latestBlock" vô tình loại bỏ đúng mọi bill mới, luôn rơi về
+      // fallback seed chậm). Không chống tuyệt đối được việc cb bị chỉnh để
+      // che giấu 1 khoảng nhỏ lịch sử thật (không phải lỗ hổng bảo mật), chỉ
+      // cần chặn giá trị rõ ràng vô lý.
+      const minFromBlock =
+        candidate !== undefined && candidate >= SABI_BILL_DEPLOY_BLOCK && candidate <= latestBlock
+          ? candidate
+          : undefined
+
+      const logs = await scanEventLogs(publicClient, 'SlotFilled', { billId }, latestBlock, `sabi-scan-SlotFilled-${billId}`, minFromBlock)
+      setScannedContributions(
+        logs.map((log: any) => ({
+          payer: log.args.payer as `0x${string}`,
+          amount: log.args.amount as bigint,
+          matched: log.args.matched as boolean,
+          txHash: log.transactionHash as `0x${string}`,
+        }))
+      )
+    } catch {
+      // 1 lần quét lỗi — giữ nguyên danh sách cũ, refetchInterval 15s bên dưới tự thử lại
+    }
+  }, [publicClient, billId, router.query.cb])
+
+  // Quét ngay khi có publicClient/billId, lặp lại mỗi 15s — thấy được cả
+  // khoản người KHÁC vừa trả trong lúc mình đang xem, không cần F5.
+  useEffect(() => {
+    scanContributions()
+    const interval = setInterval(scanContributions, 15_000)
+    return () => clearInterval(interval)
+  }, [scanContributions])
+
   const { writeContract: approve, data: approveTx, isPending: isApproving, error: approveError, reset: resetApprove } = useWriteContract()
   // chainId cố định Arc — không mặc định theo chain ví đang báo cáo, vì có thể
   // chưa cập nhật đúng (vd vừa trả cross-chain xong, ví còn ở chain nguồn) →
@@ -320,13 +420,23 @@ const BillDetail: NextPage = () => {
     if (isApproveConfirmed) refetchAllowance()
   }, [isApproveConfirmed, refetchAllowance])
 
-  // Tự động reset về "Approve" nếu sau 45s không có phản hồi từ ví
-  // (xử lý trường hợp user đóng popup MetaMask bằng nút X, không bấm Reject)
+  // Tự ẩn "Processing" nếu sau 45s không có phản hồi từ ví (xử lý trường hợp
+  // user đóng popup MetaMask bằng nút X, không bấm Reject) — CHỈ ẩn UI bằng
+  // flag riêng, KHÔNG gọi resetApprove()/reset() ở đây. reset() gỡ hẳn
+  // observer khỏi mutation đang chạy ("no way to get it back" — xem comment
+  // gốc trong @tanstack/query-core mutationObserver.ts), nên nếu popup vẫn
+  // đang mở lúc 45s trôi qua (user chỉ chậm bấm Confirm, CHƯA đóng popup),
+  // reset() sẽ âm thầm cắt đứt kết nối với tx đó — ví vẫn ký/mined thành công
+  // thật nhưng app không bao giờ nhận lại được kết quả, nút kẹt "Processing"
+  // vĩnh viễn dù MetaMask báo thành công. Giữ observer gắn nguyên để nếu ví
+  // trả lời muộn, approveTx/isApproveConfirmed vẫn cập nhật đúng, tự thoát treo.
+  const [approveTimedOut, setApproveTimedOut] = useState(false)
   useEffect(() => {
-    if (!isApproving) return
-    const timeout = setTimeout(() => {
-      resetApprove()
-    }, 45000)
+    if (!isApproving) {
+      setApproveTimedOut(false)
+      return
+    }
+    const timeout = setTimeout(() => setApproveTimedOut(true), 45000)
     return () => clearTimeout(timeout)
   }, [isApproving])
 
@@ -343,17 +453,20 @@ const BillDetail: NextPage = () => {
   const circlePayShare = useCircleContractCall()
   const circlePaySlot = useCircleContractCall()
 
-  // Approve đúng số tiền cần trả — MetaMask sẽ hiện đúng số thay vì
-  // "115792089..." khi dùng maxUint256. Mỗi lần approve cho 1 giao dịch cụ thể.
+  // Approve 1 lần với hạn mức lớn (maxUint256, chuẩn "infinite approve" phổ
+  // biến ở dApp khác) — trước đây approve đúng amountNeeded cho từng giao
+  // dịch, bắt user approve lại ở MỌI lần trả (khác bill, khác slot/share).
+  // amountToApprove không còn dùng (giữ lại tham số để không phải sửa các nơi
+  // gọi onApprove(amountPerSlot)/onApprove(totalAmount) ở ShareRow/OpenSlotInfo,
+  // vô hại vì không ảnh hưởng gì tới amount thật sự approve). hasEnoughAllowance
+  // (allowance >= amountNeeded) không đổi — mọi lần trả sau tự pass vì allowance
+  // đã đủ lớn từ lần approve đầu tiên.
   const handleApprove = async (amountToApprove?: bigint) => {
-    // Fallback: nếu không có amount cụ thể thì approve tổng bill (vẫn hợp lý)
-    const amount = amountToApprove ?? (bill?.totalAmount ?? 2n ** 128n)
-
     if (isCircleActive) {
       circleApprove.execute({
         contractAddress: ARC_USDC_ADDRESS,
         abiFunctionSignature: 'approve(address,uint256)',
-        abiParameters: [SABI_BILL_ADDRESS, amount.toString()],
+        abiParameters: [SABI_BILL_ADDRESS, maxUint256.toString()],
       })
       return
     }
@@ -365,7 +478,7 @@ const BillDetail: NextPage = () => {
       address: ARC_USDC_ADDRESS,
       abi: ERC20_ABI,
       functionName: 'approve',
-      args: [SABI_BILL_ADDRESS, amount],
+      args: [SABI_BILL_ADDRESS, maxUint256],
       chainId: arcTestnet.id,
     })
   }
@@ -378,17 +491,17 @@ const BillDetail: NextPage = () => {
   const hasEnoughAllowance = (amountNeeded: bigint) =>
     allowance !== undefined && allowance >= amountNeeded
 
-  const isApprovingNow = isCircleActive ? circleApprove.isPending : (isApproving || isConfirmingApprove)
+  const isApprovingNow = isCircleActive ? circleApprove.isPending : ((isApproving && !approveTimedOut) || isConfirmingApprove)
 
 
-  const { writeContract: payShare, data: payShareTx, isPending: isPayingShare, error: payShareError } = useWriteContract()
+  const { writeContract: payShare, data: payShareTx, isPending: isPayingShare, error: payShareError, reset: resetPayShare } = useWriteContract()
   const { isLoading: isConfirmingShare, isSuccess: isShareConfirmed } = useWaitForTransactionReceipt({
     hash: payShareTx,
     chainId: arcTestnet.id,
   })
 
   // ─── Ghi: trả tiền vào slot (mode OPEN_SLOT) ──────────────────────────────
-  const { writeContract: paySlot, data: paySlotTx, isPending: isPayingSlot, error: paySlotError } = useWriteContract()
+  const { writeContract: paySlot, data: paySlotTx, isPending: isPayingSlot, error: paySlotError, reset: resetPaySlot } = useWriteContract()
   const { isLoading: isConfirmingSlot, isSuccess: isSlotConfirmed } = useWaitForTransactionReceipt({
     hash: paySlotTx,
     chainId: arcTestnet.id,
@@ -413,6 +526,18 @@ const BillDetail: NextPage = () => {
     recordOptimisticContribution(bill.amountPerSlot, mergedPaySlotTx)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mergedSlotConfirmed, mergedPaySlotTx])
+
+  // Trả xong → đọc lại matchedSlotsCount ngay từ contract, không đợi
+  // refetchInterval 15s hay chạy tay sync-firestore mới thấy "X/3 shares paid" tăng.
+  useEffect(() => {
+    if (mergedSlotConfirmed) refetchLiveBill()
+  }, [mergedSlotConfirmed, refetchLiveBill])
+
+  // Trả xong → quét lại contributions ngay từ event on-chain, không đợi 15s
+  // hay chạy tay sync-firestore mới thấy tên người trả/progress bar cập nhật.
+  useEffect(() => {
+    if (mergedSlotConfirmed) scanContributions()
+  }, [mergedSlotConfirmed, scanContributions])
 
   // Trả trực tiếp 1 share xong → ghi ngay optimistic (payer = ví đang trả) để
   // hoá đơn hiện đúng địa chỉ thay vì "Phần #n" mãi mãi.
@@ -453,6 +578,13 @@ const BillDetail: NextPage = () => {
       })
       return
     }
+    // OPEN_SLOT cho góp nhiều lần — không reset thì paySlotTx/isSlotConfirmed
+    // của LẦN TRẢ TRƯỚC vẫn còn, khiến modal đọc nhầm "đã xong" ngay khi vừa
+    // bấm Pay lần mới, không thực sự gửi tx (mergedSlotConfirmed đã true sẵn
+    // từ trước). Mutation trước đã settle xong (không còn pending) nên reset()
+    // ở đây an toàn — không phải trường hợp gỡ observer giữa lúc còn đang chờ
+    // ví như bug approve trước đó.
+    resetPaySlot()
     paySlot({
       address: SABI_BILL_ADDRESS,
       abi: SABI_BILL_ABI,
@@ -486,7 +618,9 @@ const BillDetail: NextPage = () => {
   // + optimistic overlay), OPEN_SLOT dùng thẳng số liệu có sẵn trên bill + tổng contributions.
   const assignedProgressValues = shares.map((s) => ({ paid: s.paid, amount: BigInt(s.amount) }))
   const progressCount =
-    mode === 'ASSIGNED' ? assignedProgressValues.filter((s) => s.paid).length : Number(bill.matchedSlotsCount ?? 0)
+    mode === 'ASSIGNED'
+      ? assignedProgressValues.filter((s) => s.paid).length
+      : Number(liveBill?.matchedSlotsCount ?? bill.matchedSlotsCount)
   const progressTotalCount = mode === 'ASSIGNED' ? Number(shareCount ?? 0) : Number(bill.numSlots ?? 0)
   const progressAmount =
     mode === 'ASSIGNED'
@@ -499,7 +633,12 @@ const BillDetail: NextPage = () => {
   // hoặc luôn hiện trên desktop. Trước đây chỉ check navigator.share tồn tại, nhưng
   // Windows Edge/Chrome cũng có navigator.share (mở share dialog của Windows, không
   // kiểm soát được icon/thứ tự) → phải check thêm userAgent mobile thật.
-  const billUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/bill/${effectiveShareCode ?? billId.toString()}`
+  // ?cb=<createdBlock> đi kèm URL share — để người NHẬN link (không phải
+  // creator, không có localStorage sabi-bill-${billId}-createdBlock) vẫn
+  // nhận được floor quét đúng ngay lần mở đầu tiên, không rơi về
+  // seed.cutoffBlock (có thể rất xa, quét chậm/treo — xem scanContributions).
+  const createdBlockHint = typeof window !== 'undefined' ? localStorage.getItem(`sabi-bill-${billId.toString()}-createdBlock`) : null
+  const billUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/bill/${effectiveShareCode ?? billId.toString()}${createdBlockHint ? `?cb=${createdBlockHint}` : ''}`
   const organizerProfile = profiles[bill.organizer.toLowerCase()]
   const creatorName = organizerProfile?.profileName ?? `${bill.organizer.slice(0, 6)}…${bill.organizer.slice(-4)}`
   const shareText = t('bill.share_text', { creator: creatorName, amount: formatUnits(bill.totalAmount, 6) })
@@ -636,6 +775,7 @@ const BillDetail: NextPage = () => {
                 payError={mergedPayShareError}
                 payMethod={effectivePayMethod}
                 onCrossChainSuccess={recordOptimisticSharePaid}
+                onPayModalClosed={resetPayShare}
               />
             )}
 
@@ -655,10 +795,12 @@ const BillDetail: NextPage = () => {
                 payError={mergedPaySlotError}
                 contributions={contributions}
                 isLoadingContributions={!billLoaded}
+                isWalletReconnecting={walletStatus === 'reconnecting' || walletStatus === 'connecting'}
                 slotNames={slotNames}
                 profiles={profiles}
                 payMethod={effectivePayMethod}
                 onCrossChainSuccess={(txHash) => recordOptimisticContribution(bill.amountPerSlot, txHash)}
+                onPayModalClosed={resetPaySlot}
               />
             )}
             </div>
@@ -1015,6 +1157,7 @@ function AssignedShares({
   payError,
   payMethod,
   onCrossChainSuccess,
+  onPayModalClosed,
 }: {
   billId: bigint
   totalAmount: bigint
@@ -1040,6 +1183,9 @@ function AssignedShares({
   payError: Error | null
   payMethod: PayMethod
   onCrossChainSuccess: (shareId: number, txHash: `0x${string}`) => void
+  // Reset payShareTx/isShareConfirmed ở component cha ngay khi modal đóng —
+  // xem giải thích đầy đủ ở ShareRow (cùng bug/cùng fix đã proven ở paySlot).
+  onPayModalClosed: () => void
 }) {
   const { t } = useTranslation('common')
   const shareIds = shares.map((s) => s.shareId)
@@ -1091,6 +1237,7 @@ function AssignedShares({
             payError={isThisRowPaying ? payError : null}
             payMethod={payMethod}
             onCrossChainSuccess={(txHash) => onCrossChainSuccess(shareId, txHash)}
+            onPayModalClosed={onPayModalClosed}
           />
         )
       })}
@@ -1160,6 +1307,7 @@ function ShareRow({
   payError,
   payMethod,
   onCrossChainSuccess,
+  onPayModalClosed,
 }: {
   billId: bigint
   totalAmount: bigint
@@ -1181,6 +1329,13 @@ function ShareRow({
   payError: Error | null
   payMethod: PayMethod
   onCrossChainSuccess: (txHash: `0x${string}`) => void
+  // Reset payShareTx/isShareConfirmed ở component cha ngay khi modal đóng —
+  // KHÔNG đợi tới lúc bấm "Pay" lần sau. paySuccess (mergedShareConfirmed)
+  // giữ nguyên true từ share TRƯỚC vừa trả xong khiến PaymentArcModal tính
+  // phase='success' ngay khi vừa mở lại cho share KHÁC, ẩn luôn nút Pay bên
+  // trong modal → payShare()/reset không bao giờ được gọi tới, kẹt vĩnh viễn
+  // ở "Payment complete" — y hệt bug đã fix ở paySlot/OpenSlotInfo.
+  onPayModalClosed: () => void
 }) {
   const { t } = useTranslation('common')
   // Auto-fill tên từ profile name nếu người dùng đã đặt tên hồ sơ
@@ -1480,7 +1635,10 @@ function ShareRow({
           amount={share.amount}
           payerName={displayName || t('paymentModal.chain.default_payer_name')}
           functionName="payShare"
-          onClose={() => setShowArcModal(false)}
+          onClose={() => {
+            setShowArcModal(false)
+            onPayModalClosed()
+          }}
           onPay={() => onPayDirect(shareId)}
           isPaying={isPaying}
           payTxHash={payTxHash}
@@ -1508,10 +1666,12 @@ function OpenSlotInfo({
   payError,
   contributions,
   isLoadingContributions,
+  isWalletReconnecting,
   slotNames,
   profiles,
   payMethod,
   onCrossChainSuccess,
+  onPayModalClosed,
 }: {
   billId: bigint
   amountPerSlot: bigint
@@ -1527,10 +1687,20 @@ function OpenSlotInfo({
   payError: Error | null
   contributions: Contribution[]
   isLoadingContributions: boolean
+  isWalletReconnecting: boolean
   slotNames: Record<string, string>
   profiles: Record<string, UserFirestoreData>
   payMethod: PayMethod
   onCrossChainSuccess: (txHash: `0x${string}`) => void
+  // Reset paySlotTx/isSlotConfirmed ở component cha ngay khi modal đóng —
+  // KHÔNG đợi tới lúc bấm "Contribute" lần sau. paySuccess giữ nguyên true từ
+  // lần trả trước khiến PaymentArcModal tính phase='success' ngay khi vừa mở
+  // lại, ẩn luôn nút Pay bên trong modal → resetPaySlot() (đặt trong
+  // handlePaySlot) không bao giờ được gọi tới, kẹt vĩnh viễn ở "Payment
+  // complete". Reset lúc đóng modal (sau khi user đã xem xong kết quả) thay
+  // vì lúc bấm nút mới, tránh vòng luẩn quẩn "cần reset để hiện nút, cần nút
+  // mới reset được".
+  onPayModalClosed: () => void
 }) {
   const { t } = useTranslation('common')
   const amount = formatUnits(amountPerSlot, 6)
@@ -1695,7 +1865,10 @@ function OpenSlotInfo({
           amount={amountPerSlot}
           payerName={t('paymentModal.chain.default_payer_name')}
           functionName="paySlot"
-          onClose={() => setShowArcModal(false)}
+          onClose={() => {
+            setShowArcModal(false)
+            onPayModalClosed()
+          }}
           onPay={() => onPayDirect()}
           isPaying={isPaying}
           payTxHash={payTxHash}
@@ -1713,7 +1886,11 @@ function OpenSlotInfo({
           {t('bill.contributors_title')} {isWalletConnected && contributions.length > 0 && `(${contributions.length})`}
         </div>
 
-        {!isWalletConnected && (
+        {!isWalletConnected && isWalletReconnecting && (
+          <p style={{ color: colors.textMuted, fontSize: 12 }}>{t('bill.loading_short')}</p>
+        )}
+
+        {!isWalletConnected && !isWalletReconnecting && (
           <p style={{ color: colors.textMuted, fontSize: 12 }}>{t('bill.no_contributions')}</p>
         )}
 
